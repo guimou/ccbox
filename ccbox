@@ -1,0 +1,345 @@
+#!/bin/bash
+# Claude Code Development Container Launch Script
+# Launches a containerized Claude Code environment with the current directory mounted
+
+set -e
+
+# Configuration
+REGISTRY="quay.io"
+REGISTRY_IMAGE="guimou/ccbox"
+FULL_REGISTRY_IMAGE="${REGISTRY}/${REGISTRY_IMAGE}"
+LOCAL_IMAGE_NAME="ccbox"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Generate a unique container name based on workspace directory
+generate_container_name() {
+    local workspace_dir="$1"
+    local project_name
+    project_name=$(basename "$workspace_dir")
+    # Sanitize: lowercase, replace invalid chars with dashes
+    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+    # Add short hash of full path for uniqueness (handles same-named dirs)
+    local path_hash
+    path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    echo "ccbox-${project_name}-${path_hash}"
+}
+
+# Setup project-specific directories under ~/.claude/ccbox-projects/
+# Returns the path to the project-specific directory
+setup_project_dirs() {
+    local workspace_dir="$1"
+    local config_dir="$2"
+    local project_name
+    project_name=$(basename "$workspace_dir")
+    # Sanitize project name: lowercase, replace invalid chars
+    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+    local path_hash
+    path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    local project_dir="${config_dir}/ccbox-projects/${project_name}_${path_hash}"
+
+    mkdir -p "${project_dir}/projects/-workspace"
+    mkdir -p "${project_dir}/todos"
+    mkdir -p "${project_dir}/plans"
+    mkdir -p "${project_dir}/tasks"
+    touch "${project_dir}/history.jsonl"
+
+    echo "$project_dir"
+}
+
+# Ensure global config files and directories exist
+ensure_global_config() {
+    local config_dir="$1"
+    # Settings and credentials
+    [[ -f "${config_dir}/settings.json" ]] || echo '{}' > "${config_dir}/settings.json"
+    [[ -f "${config_dir}/settings.local.json" ]] || echo '{}' > "${config_dir}/settings.local.json"
+    [[ -f "${config_dir}/.credentials.json" ]] || echo '{}' > "${config_dir}/.credentials.json"
+    [[ -f "${config_dir}/keybindings.json" ]] || echo '{"bindings":[]}' > "${config_dir}/keybindings.json"
+    # Global memory file (empty is fine)
+    [[ -f "${config_dir}/CLAUDE.md" ]] || touch "${config_dir}/CLAUDE.md"
+    # Directories
+    [[ -d "${config_dir}/plugins" ]] || mkdir -p "${config_dir}/plugins"
+    [[ -d "${config_dir}/statsig" ]] || mkdir -p "${config_dir}/statsig"
+    [[ -d "${config_dir}/hooks" ]] || mkdir -p "${config_dir}/hooks"
+    [[ -d "${config_dir}/commands" ]] || mkdir -p "${config_dir}/commands"
+    [[ -d "${config_dir}/skills" ]] || mkdir -p "${config_dir}/skills"
+    [[ -d "${config_dir}/agents" ]] || mkdir -p "${config_dir}/agents"
+    [[ -d "${config_dir}/rules" ]] || mkdir -p "${config_dir}/rules"
+}
+
+# Show first-run message for new project directories
+migrate_if_needed() {
+    local project_dir="$1"
+    local config_dir="$2"
+
+    # Only show message if project dir is new AND old structure exists
+    if [[ ! -f "${project_dir}/.migrated" && -f "${config_dir}/history.jsonl" ]]; then
+        log_info "First run with project isolation for this workspace."
+        if [[ -f "${config_dir}/.credentials.json" ]]; then
+            log_info "Credentials will be shared across all projects."
+        fi
+        touch "${project_dir}/.migrated"
+        log_info "Project-specific data stored in: ${project_dir}"
+    fi
+}
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Parse arguments
+BUILD_ONLY=false
+USE_LOCAL=false
+NO_FIREWALL=true
+CLAUDE_VERSION=""
+EXTRA_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --build)
+            BUILD_ONLY=true
+            shift
+            ;;
+        --local)
+            USE_LOCAL=true
+            shift
+            ;;
+        --claude-version)
+            CLAUDE_VERSION="$2"
+            shift 2
+            ;;
+        --claude-version=*)
+            CLAUDE_VERSION="${1#*=}"
+            shift
+            ;;
+        --with-firewall)
+            NO_FIREWALL=false
+            shift
+            ;;
+        --)
+            shift
+            EXTRA_ARGS=("$@")
+            break
+            ;;
+        -h|--help)
+            echo "Usage: $(basename "$0") [OPTIONS] [-- CLAUDE_ARGS...]"
+            echo ""
+            echo "Run Claude Code in a container. By default, pulls from ${FULL_REGISTRY_IMAGE}."
+            echo ""
+            echo "Options:"
+            echo "  --build                  Build image locally (for development)"
+            echo "  --local                  Use locally-built image instead of pulling"
+            echo "  --claude-version VERSION Use specific Claude Code version"
+            echo "  --with-firewall          Enable network firewall restrictions"
+            echo "  -h, --help               Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $(basename "$0")                              # Pull latest and run"
+            echo "  $(basename "$0") --claude-version 2.1.29      # Pull specific version"
+            echo "  $(basename "$0") --local                      # Use local image"
+            echo "  $(basename "$0") --build                      # Build locally"
+            echo "  $(basename "$0") --with-firewall              # Run with network restrictions"
+            echo "  $(basename "$0") -- --version                 # Pass args to claude"
+            exit 0
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Check if podman is available
+if ! command -v podman &> /dev/null; then
+    log_error "podman is not installed or not in PATH"
+    exit 1
+fi
+
+# Read version from CLAUDE_VERSION file if not specified via command line
+read_version_file() {
+    local version_file="${SCRIPT_DIR}/CLAUDE_VERSION"
+    if [[ -f "$version_file" ]]; then
+        local version
+        version=$(tr -d '[:space:]' < "$version_file")
+        if [[ -n "$version" && "$version" != "latest" ]]; then
+            echo "$version"
+        fi
+    fi
+}
+
+# Determine image tag based on CLI arg, CLAUDE_VERSION file, or default to latest
+determine_image_tag() {
+    local tag="${CLAUDE_VERSION}"
+    if [[ -z "$tag" ]]; then
+        tag=$(read_version_file)
+    fi
+    if [[ -z "$tag" ]]; then
+        tag="latest"
+    fi
+    echo "$tag"
+}
+
+# Pull image from registry
+pull_image() {
+    local image_ref="$1"
+    log_info "Pulling image: $image_ref"
+    if ! podman pull "$image_ref"; then
+        log_error "Failed to pull image: $image_ref"
+        log_error "To build locally instead: $(basename "$0") --build"
+        return 1
+    fi
+}
+
+# Build image locally
+build_image() {
+    local tag
+    tag=$(determine_image_tag)
+    local full_tag="${LOCAL_IMAGE_NAME}:${tag}"
+
+    log_info "Building container image: $full_tag"
+    BUILD_ARGS=()
+
+    if [[ "$tag" != "latest" ]]; then
+        log_info "Using Claude Code version: $tag"
+        BUILD_ARGS+=(--build-arg "CLAUDE_VERSION=${tag}")
+    else
+        log_info "Using latest Claude Code version"
+    fi
+
+    podman build "${BUILD_ARGS[@]}" -t "$full_tag" "$SCRIPT_DIR"
+
+    # Also tag as latest for convenience
+    if [[ "$tag" != "latest" ]]; then
+        podman tag "$full_tag" "${LOCAL_IMAGE_NAME}:latest"
+    fi
+
+    log_info "Image built successfully: $full_tag"
+}
+
+if $BUILD_ONLY; then
+    build_image
+    exit 0
+fi
+
+# Determine image tag and reference
+IMAGE_TAG=$(determine_image_tag)
+
+if $USE_LOCAL; then
+    # Local mode: use locally-built image
+    IMAGE_REF="${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"
+    if ! podman image exists "$IMAGE_REF"; then
+        log_error "Local image '$IMAGE_REF' not found"
+        log_error "Build it with: $(basename "$0") --build"
+        exit 1
+    fi
+    log_info "Using local image: $IMAGE_REF"
+else
+    # Registry mode: pull from quay.io
+    IMAGE_REF="${FULL_REGISTRY_IMAGE}:${IMAGE_TAG}"
+    if ! pull_image "$IMAGE_REF"; then
+        exit 1
+    fi
+fi
+
+# Prepare mount points
+WORKSPACE_DIR="$(pwd)"
+CONTAINER_NAME=$(generate_container_name "$WORKSPACE_DIR")
+CLAUDE_CONFIG_DIR="${HOME}/.claude"
+GOOGLE_CONFIG_DIR="${HOME}/.config/gcloud"
+
+# Ensure claude config directory exists
+if [[ ! -d "$CLAUDE_CONFIG_DIR" ]]; then
+    log_info "Creating Claude config directory: $CLAUDE_CONFIG_DIR"
+    mkdir -p "$CLAUDE_CONFIG_DIR"
+fi
+
+# Ensure global config files exist
+ensure_global_config "$CLAUDE_CONFIG_DIR"
+
+# Setup project-specific directories
+PROJECT_DATA_DIR=$(setup_project_dirs "$WORKSPACE_DIR" "$CLAUDE_CONFIG_DIR")
+migrate_if_needed "$PROJECT_DATA_DIR" "$CLAUDE_CONFIG_DIR"
+
+# Build podman run arguments
+PODMAN_ARGS=(
+    --rm
+    -it
+    --name "$CONTAINER_NAME"
+    --hostname ccbox
+    --userns=keep-id
+    -e PROJECT_NAME="$(basename "$WORKSPACE_DIR")"
+    -v "${WORKSPACE_DIR}:/workspace:Z"
+    # Global settings (shared across all projects)
+    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json:Z"
+    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json:Z"
+    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json:Z"
+    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json:Z"
+    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md:Z"
+    -v "${CLAUDE_CONFIG_DIR}/plugins:/home/claude/.claude/plugins:Z"
+    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig:Z"
+    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks:Z"
+    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands:Z"
+    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills:Z"
+    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents:Z"
+    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules:Z"
+    # Project-specific data (isolated per project)
+    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl:Z"
+    -v "${PROJECT_DATA_DIR}/projects/-workspace:/home/claude/.claude/projects/-workspace:Z"
+    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos:Z"
+    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans:Z"
+    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks:Z"
+    # Other config files
+    -v "${HOME}/.claude.json:/home/claude/.claude.json:Z"
+    -v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud:ro,Z"
+    -v "${HOME}/.gitconfig:/home/claude/.gitconfig:ro,Z"
+    -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native:Z"
+    -v /etc/localtime:/etc/localtime:ro
+    -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
+    -e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}"
+    -e CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX}"
+    -e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}"
+    -e "TERM=${TERM:-xterm-256color}"
+    -e "LANG=${LANG:-C.UTF-8}"
+    -w /workspace
+)
+
+# Add status line script if it exists
+if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
+    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh:ro,Z")
+fi
+
+# Add firewall capabilities if firewall is enabled
+if ! $NO_FIREWALL; then
+    PODMAN_ARGS+=(
+        --cap-add=NET_ADMIN
+        --cap-add=NET_RAW
+    )
+fi
+
+# Determine what command to run
+if $NO_FIREWALL; then
+    PODMAN_ARGS+=("$IMAGE_REF" claude "${EXTRA_ARGS[@]}")
+else
+    # Start with firewall initialization, then run claude
+    PODMAN_ARGS+=("$IMAGE_REF" /bin/bash -c "sudo /usr/local/bin/init-firewall.sh && exec claude ${EXTRA_ARGS[*]}")
+fi
+
+log_info "Starting Claude Code container..."
+log_info "Workspace: $WORKSPACE_DIR"
+log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
+
+# Run the container
+exec podman run "${PODMAN_ARGS[@]}"

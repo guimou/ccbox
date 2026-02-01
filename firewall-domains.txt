@@ -1,0 +1,15 @@
+# Allowed domains for the firewall
+# One domain per line, comments start with #
+
+# Anthropic APIs
+api.anthropic.com
+sentry.io
+statsig.anthropic.com
+statsig.com
+
+# GitHub (for git operations)
+github.com
+api.github.com
+
+# npm registry (for potential package installations)
+registry.npmjs.org
