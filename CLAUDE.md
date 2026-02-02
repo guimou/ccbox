@@ -23,6 +23,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox`.
 # Launch with network firewall
 ./ccbox --with-firewall
 
+# Disable clipboard access (for extra security)
+./ccbox --no-clipboard
+
 # Pass arguments directly to claude
 ./ccbox -- --version
 
@@ -103,6 +106,16 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
 - **Project Isolation**: Each project gets its own history and session data in `~/.claude/ccbox-projects/`
 - **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`ccbox-{project}-{hash}-{session-id}`)
+
+## Clipboard Support
+
+Image pasting (CTRL+V) is enabled by default. The container mounts display sockets to access the host clipboard:
+- **Wayland**: Mounts `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (read-only)
+- **X11**: Mounts `/tmp/.X11-unix` and `~/.Xauthority` (read-only)
+
+To disable clipboard access: `./ccbox --no-clipboard`
+
+**Note**: Clipboard image pasting in containers has known limitations. If CTRL+V doesn't work, use file paths instead (e.g., paste `/path/to/image.png`).
 
 ## License
 

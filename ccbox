@@ -116,6 +116,7 @@ log_error() {
 BUILD_ONLY=false
 USE_LOCAL=false
 NO_FIREWALL=true
+NO_CLIPBOARD=false
 LIST_SESSIONS=false
 CLAUDE_VERSION=""
 EXTRA_ARGS=()
@@ -146,6 +147,10 @@ while [[ $# -gt 0 ]]; do
             LIST_SESSIONS=true
             shift
             ;;
+        --no-clipboard)
+            NO_CLIPBOARD=true
+            shift
+            ;;
         --)
             shift
             EXTRA_ARGS=("$@")
@@ -161,6 +166,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --local                  Use locally-built image instead of pulling"
             echo "  --claude-version VERSION Use specific Claude Code version"
             echo "  --with-firewall          Enable network firewall restrictions"
+            echo "  --no-clipboard           Disable clipboard access (for extra security)"
             echo "  --list-sessions          List active sessions for this project"
             echo "  -h, --help               Show this help message"
             echo ""
@@ -349,6 +355,27 @@ if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
     PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh:ro,Z")
 fi
 
+# Clipboard/display access for image pasting (CTRL+V)
+if ! $NO_CLIPBOARD; then
+    if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+        # Wayland clipboard access
+        PODMAN_ARGS+=(
+            -v "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:ro"
+            -e "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+            -e "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
+        )
+    elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+        # X11 clipboard access
+        PODMAN_ARGS+=(
+            -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
+            -e "DISPLAY=${DISPLAY}"
+        )
+        if [[ -f "${HOME}/.Xauthority" ]]; then
+            PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority:ro,Z")
+        fi
+    fi
+fi
+
 # Add firewall capabilities if firewall is enabled
 if ! $NO_FIREWALL; then
     PODMAN_ARGS+=(
@@ -369,6 +396,7 @@ log_info "Starting Claude Code container..."
 log_info "Workspace: $WORKSPACE_DIR"
 log_info "Session: $SESSION_ID"
 log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
+log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
 
 # Run the container
 exec podman run "${PODMAN_ARGS[@]}"

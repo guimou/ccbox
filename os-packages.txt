@@ -53,3 +53,7 @@ readline-devel
 # Additional language runtimes
 cargo
 golang
+
+# Clipboard tools (for image pasting support)
+xclip
+wl-clipboard
