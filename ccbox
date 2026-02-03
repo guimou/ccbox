@@ -15,23 +15,15 @@ detect_os() {
 
 OS_TYPE=$(detect_os)
 
-# Volume flag helper - adds :Z for SELinux on Linux, nothing on macOS
+# Volume flag helper - adds :Z for SELinux relabeling
 # Returns the full options string including leading colon if needed
+# On macOS, Podman VM runs Fedora CoreOS with SELinux, so :Z is needed
 vol_flag() {
     local opts="$1"
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        if [[ -n "$opts" ]]; then
-            echo ":${opts},Z"
-        else
-            echo ":Z"
-        fi
+    if [[ -n "$opts" ]]; then
+        echo ":${opts},Z"
     else
-        # macOS: only add colon if there are options
-        if [[ -n "$opts" ]]; then
-            echo ":${opts}"
-        else
-            echo ""
-        fi
+        echo ":Z"
     fi
 }
 
@@ -475,10 +467,10 @@ PODMAN_ARGS=(
     -w /workspace
 )
 
-# Add userns flag only on Linux
-if [[ "$OS_TYPE" == "linux" ]]; then
-    PODMAN_ARGS+=(--userns=keep-id)
-fi
+# Enable user namespace mapping
+# On Linux: Maps host UID to container UID 1000
+# On macOS: Maps through Podman VM - combined with :Z labels for proper SELinux context
+PODMAN_ARGS+=(--userns=keep-id)
 
 # Add Vertex AI env vars if set
 if [[ -n "${CLAUDE_CODE_USE_VERTEX}" ]]; then
