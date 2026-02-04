@@ -62,6 +62,9 @@ ccbox -- --version
 # Run with network firewall (restricts outbound connections, Linux only)
 ccbox --with-firewall
 
+# Disable GitHub token injection
+ccbox --no-github
+
 # Build a local image (for development or Apple Silicon)
 ccbox --build
 
@@ -127,6 +130,38 @@ echo "2.1.29" > ~/path/to/ccbox/CLAUDE_VERSION
 ```
 
 This ensures everyone uses the same version. The `--claude-version` flag overrides this file.
+
+### GitHub Authentication
+
+For Claude Code to interact with GitHub (clone private repos, push, create PRs), authenticate on the host **before** launching ccbox:
+
+```bash
+# One-time setup on host
+gh auth login
+```
+
+Follow the prompts to authenticate via browser or token. The OAuth token is automatically detected and injected into the container as `GH_TOKEN`.
+
+**How it works:**
+- Token is auto-detected from host's `gh` CLI
+- Git HTTPS operations work automatically inside the container
+- `gh` CLI commands work inside the container
+- No sensitive files are mounted (no `~/.ssh`, no `~/.config/gh`)
+
+**CLI options:**
+
+```bash
+ccbox                              # Auto-detect and inject token (default)
+ccbox --no-github                  # Launch without GitHub token
+ccbox --with-github                # Explicitly request token (warn if unavailable)
+ccbox --github-token "ghp_xxx"     # Use specific token instead of auto-detecting
+```
+
+**Security notes:**
+- The token is a revocable OAuth token, not your SSH key
+- Revoke anytime: GitHub Settings → Developer settings → Personal access tokens
+- For extra security, use `--with-firewall` to limit network access
+- Use fine-grained PATs for minimal scope
 
 ## Architecture
 

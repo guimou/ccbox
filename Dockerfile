@@ -63,6 +63,10 @@ RUN if [ -z "${CLAUDE_VERSION}" ]; then \
 # Also add npm-global/bin for host-mounted npm packages
 ENV PATH="/home/claude/.npm-global/bin:/home/claude/.local/bin:${PATH}"
 
+# Configure git to use GH_TOKEN for HTTPS authentication when available
+# This credential helper returns the token from the environment variable
+RUN git config --global credential.helper '!f() { test -n "$GH_TOKEN" && echo "password=$GH_TOKEN"; }; f'
+
 # Set working directory to workspace
 WORKDIR /workspace
 
