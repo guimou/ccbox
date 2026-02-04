@@ -15,15 +15,18 @@ detect_os() {
 
 OS_TYPE=$(detect_os)
 
-# Volume flag helper - adds :Z for SELinux relabeling
-# Returns the full options string including leading colon if needed
-# On macOS, Podman VM runs Fedora CoreOS with SELinux, so :Z is needed
+# Volume flag helper - adds :Z for SELinux relabeling on Linux
+# On macOS, Podman VM uses virtiofs which doesn't support SELinux labels
 vol_flag() {
     local opts="$1"
-    if [[ -n "$opts" ]]; then
-        echo ":${opts},Z"
-    else
-        echo ":Z"
+    [[ "$OS_TYPE" == "linux" ]] && local label="Z" || local label=""
+
+    if [[ -n "$opts" && -n "$label" ]]; then
+        echo ":${opts},${label}"
+    elif [[ -n "$label" ]]; then
+        echo ":${label}"
+    elif [[ -n "$opts" ]]; then
+        echo ":${opts}"
     fi
 }
 
@@ -309,7 +312,7 @@ fi
 
 # Handle --list-sessions early (doesn't need image)
 if $LIST_SESSIONS; then
-    WORKSPACE_DIR="$(pwd)"
+    WORKSPACE_DIR="$(pwd -P)"
     BASE_NAME=$(generate_container_name "$WORKSPACE_DIR")
     log_info "Active sessions for: $(basename "$WORKSPACE_DIR")"
     podman ps --filter "name=^${BASE_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"
@@ -409,7 +412,8 @@ else
 fi
 
 # Prepare mount points
-WORKSPACE_DIR="$(pwd)"
+# Resolve symlinks (e.g., /tmp -> /private/tmp on macOS) to avoid mount issues
+WORKSPACE_DIR="$(pwd -P)"
 SESSION_ID=$(generate_session_id)
 CONTAINER_NAME=$(generate_container_name "$WORKSPACE_DIR" "$SESSION_ID")
 CLAUDE_CONFIG_DIR="${HOME}/.claude"
@@ -469,7 +473,7 @@ PODMAN_ARGS=(
 
 # Enable user namespace mapping
 # On Linux: Maps host UID to container UID 1000
-# On macOS: Maps through Podman VM - combined with :Z labels for proper SELinux context
+# On macOS: Maps through Podman VM
 PODMAN_ARGS+=(--userns=keep-id)
 
 # Add Vertex AI env vars if set
@@ -483,7 +487,7 @@ fi
 # Add timezone on Linux (macOS handles this differently)
 if [[ "$OS_TYPE" == "linux" ]]; then
     PODMAN_ARGS+=(-e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}")
-    # PulseAudio support
+    # PulseAudio support (shared across containers)
     if [[ -n "${XDG_RUNTIME_DIR}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
         PODMAN_ARGS+=(
             -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native$(vol_flag "")"
@@ -492,7 +496,7 @@ if [[ "$OS_TYPE" == "linux" ]]; then
     fi
 fi
 
-# Add optional config files if they exist
+# Add optional config files if they exist (all shared, read-only)
 if [[ -d "${GOOGLE_CONFIG_DIR}" ]]; then
     PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
 fi
@@ -540,9 +544,17 @@ if ! $NO_CLIPBOARD; then
     fi
 fi
 
-# Mount npm global packages (read-only) if available and not a system directory
+# Mount npm global packages (read-only) if available and accessible
+# On macOS, Podman VM only shares /Users and /private by default, so skip other paths
 if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
-    PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        # Only mount if path is in Podman-accessible directory
+        if [[ "$NPM_GLOBAL" == /Users/* ]] || [[ "$NPM_GLOBAL" == /private/* ]]; then
+            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+        fi
+    else
+        PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+    fi
 fi
 
 # Add firewall capabilities if firewall is enabled (Linux only)
@@ -573,4 +585,10 @@ log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'
 log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
 
 # Run the container
+# Debug: Print the command
+if [[ -n "${DEBUG}" ]]; then
+    echo "DEBUG: podman run command:" >&2
+    printf '%q ' podman run "${PODMAN_ARGS[@]}" >&2
+    echo >&2
+fi
 exec podman run "${PODMAN_ARGS[@]}"
