@@ -451,7 +451,6 @@ PODMAN_ARGS=(
     -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands$(vol_flag "")"
@@ -464,6 +463,7 @@ PODMAN_ARGS=(
     -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos$(vol_flag "")"
     -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans$(vol_flag "")"
     -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
     # Other config files
     -v "${HOME}/.claude.json:/home/claude/.claude.json$(vol_flag "")"
     -e "TERM=${TERM:-xterm-256color}"
