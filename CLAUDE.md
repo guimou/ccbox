@@ -190,6 +190,39 @@ The container auto-detects `npm config get prefix` and mounts it if it's a user 
 - System directories (`/usr`, `/usr/local`) are never mounted
 - Only user-local prefixes (like `~/.npm-global`) are mounted
 
+## GitHub Authentication
+
+For Claude Code to interact with GitHub (clone private repos, push, create PRs), authenticate on the host **before** launching ccbox.
+
+### Setup (one-time)
+```bash
+# On host - authenticate with GitHub
+gh auth login
+```
+
+Follow the prompts to authenticate via browser or token. This creates an OAuth token that ccbox automatically detects and injects into the container.
+
+### How it works
+- Token is passed via `GH_TOKEN` environment variable
+- Git HTTPS operations work automatically
+- `gh` CLI commands work inside the container
+- Token persists until you revoke it via GitHub settings
+
+### CLI Options
+```bash
+./ccbox                              # Auto-detect and inject token (default)
+./ccbox --no-github                  # Launch without GitHub token
+./ccbox --with-github                # Explicitly request token (warn if unavailable)
+./ccbox --github-token "ghp_xxx"     # Use specific token
+```
+
+### Security Notes
+- Token is **not** your SSH key - it's a revocable OAuth token
+- No sensitive files are mounted (no `~/.ssh`, no `~/.config/gh`)
+- Revoke anytime: GitHub Settings → Developer settings → Personal access tokens
+- For extra security, use `--with-firewall` to limit network access
+- Use fine-grained PATs or GitHub App tokens for minimal scope
+
 ## License
 
 Apache License 2.0

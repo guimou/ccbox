@@ -210,6 +210,9 @@ BUILD_ONLY=false
 USE_LOCAL=false
 NO_FIREWALL=true
 NO_CLIPBOARD=false
+NO_GITHUB=false
+WITH_GITHUB=false
+GITHUB_TOKEN=""
 LIST_SESSIONS=false
 SHOW_INSTALL=false
 CLAUDE_VERSION=""
@@ -258,6 +261,22 @@ while [[ $# -gt 0 ]]; do
             NPM_GLOBAL="${1#*=}"
             shift
             ;;
+        --with-github)
+            WITH_GITHUB=true
+            shift
+            ;;
+        --no-github)
+            NO_GITHUB=true
+            shift
+            ;;
+        --github-token)
+            GITHUB_TOKEN="$2"
+            shift 2
+            ;;
+        --github-token=*)
+            GITHUB_TOKEN="${1#*=}"
+            shift
+            ;;
         --)
             shift
             EXTRA_ARGS=("$@")
@@ -275,6 +294,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --with-firewall          Enable network firewall restrictions"
             echo "  --no-clipboard           Disable clipboard access (for extra security)"
             echo "  --npm-global PATH        Mount npm global prefix (auto-detected if not set)"
+            echo "  --with-github            Explicitly enable GitHub token injection (auto by default)"
+            echo "  --no-github              Disable GitHub token injection"
+            echo "  --github-token TOKEN     Use specific GitHub token instead of auto-detecting"
             echo "  --list-sessions          List active sessions for this project"
             echo "  --install                Show installation instructions"
             echo "  -h, --help               Show this help message"
@@ -285,6 +307,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $(basename "$0") --local                      # Use local image"
             echo "  $(basename "$0") --build                      # Build locally"
             echo "  $(basename "$0") --with-firewall              # Run with network restrictions"
+            echo "  $(basename "$0") --no-github                  # Run without GitHub token"
             echo "  $(basename "$0") -- --version                 # Pass args to claude"
             exit 0
             ;;
@@ -564,6 +587,32 @@ if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/loca
     fi
 fi
 
+# GitHub token injection for authentication
+# Token is auto-detected from host's gh CLI unless --no-github is specified
+GH_TOKEN_VALUE=""
+GH_TOKEN_SOURCE=""
+
+if ! $NO_GITHUB; then
+    if [[ -n "$GITHUB_TOKEN" ]]; then
+        # Use explicitly provided token
+        GH_TOKEN_VALUE="$GITHUB_TOKEN"
+        GH_TOKEN_SOURCE="provided"
+    elif command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        # Auto-detect from host's gh CLI
+        GH_TOKEN_VALUE=$(gh auth token 2>/dev/null || true)
+        GH_TOKEN_SOURCE="auto-detected"
+    fi
+
+    # Pass token to container if available
+    if [[ -n "$GH_TOKEN_VALUE" ]]; then
+        PODMAN_ARGS+=(-e "GH_TOKEN=${GH_TOKEN_VALUE}")
+        PODMAN_ARGS+=(-e "GITHUB_TOKEN=${GH_TOKEN_VALUE}")
+    elif $WITH_GITHUB; then
+        log_warn "GitHub token requested but not available"
+        log_warn "Run 'gh auth login' on host to authenticate with GitHub"
+    fi
+fi
+
 # Add firewall capabilities if firewall is enabled (Linux only)
 if ! $NO_FIREWALL; then
     if [[ "$OS_TYPE" == "linux" ]]; then
@@ -590,6 +639,13 @@ log_info "Workspace: $WORKSPACE_DIR"
 log_info "Session: $SESSION_ID"
 log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
 log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
+if $NO_GITHUB; then
+    log_info "GitHub: disabled"
+elif [[ -n "$GH_TOKEN_VALUE" ]]; then
+    log_info "GitHub: enabled ($GH_TOKEN_SOURCE)"
+else
+    log_info "GitHub: not available (run 'gh auth login' to enable)"
+fi
 
 # Debug mode: print the podman command
 if [[ -n "${DEBUG}" ]]; then
