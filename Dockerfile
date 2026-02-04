@@ -18,6 +18,10 @@ RUN dnf upgrade -y && \
     dnf clean all && \
     rm -rf /var/cache/dnf /tmp/os-packages.txt
 
+# Install OpenShift CLI (oc) - not available in Fedora repos
+RUN curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+    | tar xzf - -C /usr/local/bin oc
+
 # Create non-root user 'claude' with UID 1000
 # Using UID 1000 for compatibility with --userns=keep-id
 RUN useradd -m -u 1000 -s /bin/bash claude && \
@@ -58,6 +62,10 @@ RUN if [ -z "${CLAUDE_VERSION}" ]; then \
 # Add Claude to PATH (native installer puts it in ~/.local/bin)
 # Also add npm-global/bin for host-mounted npm packages
 ENV PATH="/home/claude/.npm-global/bin:/home/claude/.local/bin:${PATH}"
+
+# Configure git to use GH_TOKEN for HTTPS authentication when available
+# This credential helper returns the token from the environment variable
+RUN git config --global credential.helper '!f() { test -n "$GH_TOKEN" && echo "password=$GH_TOKEN"; }; f'
 
 # Set working directory to workspace
 WORKDIR /workspace

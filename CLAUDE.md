@@ -15,7 +15,7 @@ By default, the container image is pulled from `quay.io/guimou/ccbox`.
 ./ccbox
 
 # Launch with specific version from registry
-./ccbox --claude-version 2.1.29
+./ccbox --claude-version 2.1.31
 
 # Launch with locally-built image
 ./ccbox --local
@@ -44,7 +44,7 @@ For local development, you can build the image locally:
 ./ccbox --build
 
 # Build specific version locally
-./ccbox --build --claude-version 2.1.29
+./ccbox --build --claude-version 2.1.31
 ```
 
 ## File Structure
@@ -61,57 +61,41 @@ For local development, you can build the image locally:
 The container comes pre-installed with tools commonly used by Claude Code plugins and skills.
 
 ### Editors
-- **vim**, **nano**, **emacs** - Text editors for all preferences
+- **vim**, **nano** - Text editors
 
 ### Search & Navigation
 - **ripgrep** (`rg`) - Fast recursive grep
 - **fd** (`fd-find`) - User-friendly find alternative
-- **fzf** - Fuzzy finder for files and history
 - **tree** - Directory structure visualization
 
 ### Languages & Runtimes
 - **Node.js** with npm and pnpm
 - **Python 3** with pip and virtualenv
-- **Go** (golang)
-- **Rust** (cargo)
 
 ### Build Tools
-- **make**, **cmake**, **autoconf**, **automake**
+- **make**, **cmake** - Build systems
 - **gcc**, **g++** - C/C++ compilers
 - **pkg-config** - Library configuration
 
 ### Version Control
-- **git**, **gh** (GitHub CLI), **tig**
+- **git**, **gh** (GitHub CLI)
 
-### Terminal & Process
-- **tmux** - Terminal multiplexer
-- **htop** - Interactive process viewer
-- **strace** - System call tracer
-
-### Media Processing
-- **ffmpeg** - Video/audio processing
-- **ImageMagick** (`convert`) - Image manipulation
-
-### Document Processing
-- **pandoc** - Universal document converter
+### Diagram Generation
 - **graphviz** (`dot`) - Diagram generation
 
 ### Database Clients
 - **sqlite**, **psql** (PostgreSQL), **mysql**, **redis-cli**
 
-### DevOps & Containers
-- **podman-remote** - Container management
+### DevOps
 - **kubectl** - Kubernetes CLI
-- **oc** - OpenShift CLI
 - **ansible** - Configuration management
 
 ### Code Quality
 - **ruff** - Fast Python linter
 - **ShellCheck** - Shell script analyzer
-- **bat** - Cat with syntax highlighting
 
 ### Networking
-- **curl**, **wget** - HTTP clients
+- **curl** - HTTP client
 - **openssh-clients** - SSH/SCP
 - **bind-utils** - DNS tools (dig, nslookup)
 
@@ -134,8 +118,8 @@ echo "example.com" >> firewall-domains.txt
 ### Pinning Claude Code Version
 Create a `CLAUDE_VERSION` file to pin the version (useful for teams):
 ```bash
-echo "2.1.29" > CLAUDE_VERSION
-./ccbox  # Will use version 2.1.29
+echo "2.1.31" > CLAUDE_VERSION
+./ccbox  # Will use version 2.1.31
 ```
 The `--claude-version` CLI flag takes precedence over the file.
 
@@ -205,6 +189,39 @@ The container auto-detects `npm config get prefix` and mounts it if it's a user 
 - Mounted **read-only**: `npm install -g` inside the container will fail
 - System directories (`/usr`, `/usr/local`) are never mounted
 - Only user-local prefixes (like `~/.npm-global`) are mounted
+
+## GitHub Authentication
+
+For Claude Code to interact with GitHub (clone private repos, push, create PRs), authenticate on the host **before** launching ccbox.
+
+### Setup (one-time)
+```bash
+# On host - authenticate with GitHub
+gh auth login
+```
+
+Follow the prompts to authenticate via browser or token. This creates an OAuth token that ccbox automatically detects and injects into the container.
+
+### How it works
+- Token is passed via `GH_TOKEN` environment variable
+- Git HTTPS operations work automatically
+- `gh` CLI commands work inside the container
+- Token persists until you revoke it via GitHub settings
+
+### CLI Options
+```bash
+./ccbox                              # Auto-detect and inject token (default)
+./ccbox --no-github                  # Launch without GitHub token
+./ccbox --with-github                # Explicitly request token (warn if unavailable)
+./ccbox --github-token "ghp_xxx"     # Use specific token
+```
+
+### Security Notes
+- Token is **not** your SSH key - it's a revocable OAuth token
+- No sensitive files are mounted (no `~/.ssh`, no `~/.config/gh`)
+- Revoke anytime: GitHub Settings → Developer settings → Personal access tokens
+- For extra security, use `--with-firewall` to limit network access
+- Use fine-grained PATs or GitHub App tokens for minimal scope
 
 ## License
 

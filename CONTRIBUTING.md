@@ -9,7 +9,7 @@
 ./ccbox --build
 
 # Build a specific version
-./ccbox --build --claude-version 2.1.29
+./ccbox --build --claude-version 2.1.31
 
 # Use locally-built image instead of pulling from registry
 ./ccbox --local
@@ -64,7 +64,7 @@ The workflow triggers on changes to:
 | Tag | Description |
 |-----|-------------|
 | `latest` | Most recent build |
-| `2.1.29` | Specific Claude Code version |
+| `2.1.31` | Specific Claude Code version |
 | `abc1234` | Git commit SHA (short) |
 
 ### Pulling Pre-built Images
@@ -74,7 +74,7 @@ The workflow triggers on changes to:
 podman pull quay.io/guimou/ccbox:latest
 
 # Pull a specific version
-podman pull quay.io/guimou/ccbox:2.1.29
+podman pull quay.io/guimou/ccbox:2.1.31
 ```
 
 ### Manual Workflow Dispatch
@@ -107,10 +107,10 @@ To release a new version:
 
 ```bash
 # Update the version file
-echo "2.1.30" > CLAUDE_VERSION
+echo "2.1.32" > CLAUDE_VERSION
 
 # Commit and push
 git add CLAUDE_VERSION
-git commit -m "chore: bump Claude Code version to 2.1.30"
+git commit -m "chore: bump Claude Code version to 2.1.32"
 git push origin main
 ```
