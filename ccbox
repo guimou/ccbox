@@ -328,33 +328,33 @@ PODMAN_ARGS=(
     -it
     --name "$CONTAINER_NAME"
     --hostname ccbox
-    --userns=keep-id
+    --userns=keep-id:uid=1000,gid=1000
     -e PROJECT_NAME="$(basename "$WORKSPACE_DIR")"
-    -v "${WORKSPACE_DIR}:/workspace:Z"
+    -v "${WORKSPACE_DIR}:/workspace:z"
     # Global settings (shared across all projects)
-    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json:Z"
-    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json:Z"
-    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json:Z"
-    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json:Z"
-    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md:Z"
-    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig:Z"
-    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks:Z"
-    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands:Z"
-    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills:Z"
-    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents:Z"
-    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules:Z"
+    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json:z"
+    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json:z"
+    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json:z"
+    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json:z"
+    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md:z"
+    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig:z"
+    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks:z"
+    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands:z"
+    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills:z"
+    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents:z"
+    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules:z"
     # Project-specific data (isolated per project)
-    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl:Z"
-    -v "${PROJECT_DATA_DIR}/projects/-workspace:/home/claude/.claude/projects/-workspace:Z"
-    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos:Z"
-    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans:Z"
-    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks:Z"
-    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins:Z"
+    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl:z"
+    -v "${PROJECT_DATA_DIR}/projects/-workspace:/home/claude/.claude/projects/-workspace:z"
+    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos:z"
+    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans:z"
+    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks:z"
+    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins:z"
     # Other config files
-    -v "${HOME}/.claude.json:/home/claude/.claude.json:Z"
-    -v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud:ro,Z"
-    -v "${HOME}/.gitconfig:/home/claude/.gitconfig:ro,Z"
-    -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native:Z"
+    -v "${HOME}/.claude.json:/home/claude/.claude.json:z"
+    -v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud:ro,z"
+    -v "${HOME}/.gitconfig:/home/claude/.gitconfig:ro,z"
+    -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native:z"
     -v /etc/localtime:/etc/localtime:ro
     -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
     -e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}"
@@ -367,7 +367,7 @@ PODMAN_ARGS=(
 
 # Add status line script if it exists
 if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
-    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh:ro,Z")
+    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh:ro,z")
 fi
 
 # Clipboard/display access for image pasting (CTRL+V)
@@ -386,14 +386,14 @@ if ! $NO_CLIPBOARD; then
             -e "DISPLAY=${DISPLAY}"
         )
         if [[ -f "${HOME}/.Xauthority" ]]; then
-            PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority:ro,Z")
+            PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority:ro,z")
         fi
     fi
 fi
 
 # Mount npm global packages (read-only) if available and not a system directory
 if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
-    PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global:ro,Z")
+    PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global:ro,z")
 fi
 
 # Add firewall capabilities if firewall is enabled
