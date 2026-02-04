@@ -4,6 +4,32 @@
 
 set -e
 
+# Detect OS
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)     echo "linux";;
+        Darwin*)    echo "macos";;
+        *)          echo "unknown";;
+    esac
+}
+
+OS_TYPE=$(detect_os)
+
+# Volume flag helper - adds :z for SELinux relabeling on Linux
+# On macOS, Podman VM uses virtiofs which doesn't support SELinux labels
+vol_flag() {
+    local opts="$1"
+    [[ "$OS_TYPE" == "linux" ]] && local label="z" || local label=""
+
+    if [[ -n "$opts" && -n "$label" ]]; then
+        echo ":${opts},${label}"
+    elif [[ -n "$label" ]]; then
+        echo ":${label}"
+    elif [[ -n "$opts" ]]; then
+        echo ":${opts}"
+    fi
+}
+
 # Configuration
 REGISTRY="quay.io"
 REGISTRY_IMAGE="guimou/ccbox"
@@ -13,7 +39,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Generate a unique session identifier
 generate_session_id() {
-    cat /proc/sys/kernel/random/uuid | cut -c1-8
+    if [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid | cut -c1-8
+    else
+        # macOS fallback
+        uuidgen | tr '[:upper:]' '[:lower:]' | cut -c1-8
+    fi
 }
 
 # Generate a unique container name based on workspace directory
@@ -27,7 +58,12 @@ generate_container_name() {
     project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
     # Add short hash of full path for uniqueness (handles same-named dirs)
     local path_hash
-    path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    if command -v md5sum &> /dev/null; then
+        path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    else
+        # macOS fallback
+        path_hash=$(echo -n "$workspace_dir" | md5 | cut -c1-8)
+    fi
 
     if [[ -n "$session_id" ]]; then
         echo "ccbox-${project_name}-${path_hash}-${session_id}"
@@ -46,7 +82,12 @@ setup_project_dirs() {
     # Sanitize project name: lowercase, replace invalid chars
     project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
     local path_hash
-    path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    if command -v md5sum &> /dev/null; then
+        path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
+    else
+        # macOS fallback
+        path_hash=$(echo -n "$workspace_dir" | md5 | cut -c1-8)
+    fi
     local project_dir="${config_dir}/ccbox-projects/${project_name}_${path_hash}"
 
     mkdir -p "${project_dir}/projects/-workspace"
@@ -112,12 +153,65 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Show installation instructions for the current OS and shell
+show_install_instructions() {
+    local install_dir="${HOME}/.local/bin"
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+    echo "Installation Instructions"
+    echo "========================="
+    echo ""
+    echo "1. Create the bin directory (if needed):"
+    echo "   mkdir -p ${install_dir}"
+    echo ""
+    echo "2. Create a symlink to ccbox:"
+    echo "   ln -sf ${script_path} ${install_dir}/ccbox"
+    echo ""
+    echo "3. Add to your PATH (if not already):"
+
+    local shell_name
+    shell_name=$(basename "$SHELL")
+    case "$shell_name" in
+        zsh)
+            echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.zshrc"
+            echo "   source ~/.zshrc"
+            ;;
+        bash)
+            if [[ "$OS_TYPE" == "macos" ]]; then
+                echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.bash_profile"
+                echo "   source ~/.bash_profile"
+            else
+                echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.bashrc"
+                echo "   source ~/.bashrc"
+            fi
+            ;;
+        *)
+            echo "   Add ${install_dir} to your shell's PATH"
+            ;;
+    esac
+
+    echo ""
+    echo "4. Verify installation:"
+    echo "   ccbox --help"
+
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        echo ""
+        echo "macOS Notes:"
+        echo "  - Install Podman Desktop: https://podman-desktop.io/downloads"
+        echo "  - Or via Homebrew: brew install podman"
+        echo "  - Start the Podman machine: podman machine start"
+        echo "  - For Apple Silicon, build a local ARM64 image: ccbox --build"
+    fi
+}
+
 # Parse arguments
 BUILD_ONLY=false
 USE_LOCAL=false
 NO_FIREWALL=true
 NO_CLIPBOARD=false
 LIST_SESSIONS=false
+SHOW_INSTALL=false
 CLAUDE_VERSION=""
 NPM_GLOBAL=""
 EXTRA_ARGS=()
@@ -152,6 +246,10 @@ while [[ $# -gt 0 ]]; do
             NO_CLIPBOARD=true
             shift
             ;;
+        --install)
+            SHOW_INSTALL=true
+            shift
+            ;;
         --npm-global)
             NPM_GLOBAL="$2"
             shift 2
@@ -178,6 +276,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-clipboard           Disable clipboard access (for extra security)"
             echo "  --npm-global PATH        Mount npm global prefix (auto-detected if not set)"
             echo "  --list-sessions          List active sessions for this project"
+            echo "  --install                Show installation instructions"
             echo "  -h, --help               Show this help message"
             echo ""
             echo "Examples:"
@@ -196,15 +295,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Handle --install early (doesn't need podman)
+if $SHOW_INSTALL; then
+    show_install_instructions
+    exit 0
+fi
+
 # Check if podman is available
 if ! command -v podman &> /dev/null; then
     log_error "podman is not installed or not in PATH"
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        log_error "Install Podman Desktop from: https://podman-desktop.io/downloads"
+        log_error "Or install via Homebrew: brew install podman"
+    fi
     exit 1
+fi
+
+# On macOS, check if podman machine is running
+if [[ "$OS_TYPE" == "macos" ]]; then
+    if ! podman machine list 2>/dev/null | grep -q "Currently running"; then
+        log_warn "Podman machine might not be running"
+        log_info "Start it with: podman machine start"
+    fi
 fi
 
 # Handle --list-sessions early (doesn't need image)
 if $LIST_SESSIONS; then
-    WORKSPACE_DIR="$(pwd)"
+    WORKSPACE_DIR="$(pwd -P)"
     BASE_NAME=$(generate_container_name "$WORKSPACE_DIR")
     log_info "Active sessions for: $(basename "$WORKSPACE_DIR")"
     podman ps --filter "name=^${BASE_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"
@@ -280,6 +397,12 @@ fi
 # Determine image tag and reference
 IMAGE_TAG=$(determine_image_tag)
 
+# On macOS, auto-detect and prefer local ARM64 image to avoid x86 emulation
+if [[ "$OS_TYPE" == "macos" ]] && ! $USE_LOCAL && podman image exists "${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"; then
+    log_info "Found local ARM64 image, using it to avoid emulation"
+    USE_LOCAL=true
+fi
+
 if $USE_LOCAL; then
     # Local mode: use locally-built image
     IMAGE_REF="${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"
@@ -298,7 +421,7 @@ else
 fi
 
 # Prepare mount points
-WORKSPACE_DIR="$(pwd)"
+WORKSPACE_DIR="$(pwd -P)"
 SESSION_ID=$(generate_session_id)
 CONTAINER_NAME=$(generate_container_name "$WORKSPACE_DIR" "$SESSION_ID")
 CLAUDE_CONFIG_DIR="${HOME}/.claude"
@@ -330,78 +453,128 @@ PODMAN_ARGS=(
     --hostname ccbox
     --userns=keep-id:uid=1000,gid=1000
     -e PROJECT_NAME="$(basename "$WORKSPACE_DIR")"
-    -v "${WORKSPACE_DIR}:/workspace:z"
+    -v "${WORKSPACE_DIR}:/workspace$(vol_flag "")"
     # Global settings (shared across all projects)
-    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json:z"
-    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json:z"
-    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json:z"
-    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json:z"
-    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md:z"
-    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig:z"
-    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks:z"
-    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands:z"
-    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills:z"
-    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents:z"
-    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules:z"
+    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules$(vol_flag "")"
     # Project-specific data (isolated per project)
-    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl:z"
-    -v "${PROJECT_DATA_DIR}/projects/-workspace:/home/claude/.claude/projects/-workspace:z"
-    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos:z"
-    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans:z"
-    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks:z"
-    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins:z"
+    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/projects/-workspace:/home/claude/.claude/projects/-workspace$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks$(vol_flag "")"
+    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
     # Other config files
-    -v "${HOME}/.claude.json:/home/claude/.claude.json:z"
-    -v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud:ro,z"
-    -v "${HOME}/.gitconfig:/home/claude/.gitconfig:ro,z"
-    -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native:z"
-    -v /etc/localtime:/etc/localtime:ro
-    -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
-    -e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}"
-    -e CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX}"
-    -e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}"
+    -v "${HOME}/.claude.json:/home/claude/.claude.json$(vol_flag "")"
     -e "TERM=${TERM:-xterm-256color}"
     -e "LANG=${LANG:-C.UTF-8}"
     -w /workspace
 )
 
+# Add optional mounts that may not exist on all systems
+if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
+    PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
+fi
+
+if [[ -f "${HOME}/.gitconfig" ]]; then
+    PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig$(vol_flag "ro")")
+fi
+
 # Add status line script if it exists
 if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
-    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh:ro,z")
+    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh$(vol_flag "ro")")
+fi
+
+# Linux-specific mounts and environment variables
+if [[ "$OS_TYPE" == "linux" ]]; then
+    # Timezone
+    if [[ -f /etc/localtime ]]; then
+        PODMAN_ARGS+=(-v /etc/localtime:/etc/localtime:ro)
+    fi
+    PODMAN_ARGS+=(-e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}")
+
+    # PulseAudio socket for audio support
+    if [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+        PODMAN_ARGS+=(
+            -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native$(vol_flag "")"
+            -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
+        )
+    fi
+fi
+
+# Vertex AI environment variables (if set)
+if [[ -n "$CLAUDE_CODE_USE_VERTEX" ]]; then
+    PODMAN_ARGS+=(-e CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX}")
+fi
+if [[ -n "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
+    PODMAN_ARGS+=(-e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}")
 fi
 
 # Clipboard/display access for image pasting (CTRL+V)
 if ! $NO_CLIPBOARD; then
-    if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
-        # Wayland clipboard access
-        PODMAN_ARGS+=(
-            -v "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:ro"
-            -e "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
-            -e "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-        )
-    elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
-        # X11 clipboard access
-        PODMAN_ARGS+=(
-            -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
-            -e "DISPLAY=${DISPLAY}"
-        )
-        if [[ -f "${HOME}/.Xauthority" ]]; then
-            PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority:ro,z")
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+            # Wayland clipboard access
+            PODMAN_ARGS+=(
+                -v "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:ro"
+                -e "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+                -e "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
+            )
+        elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+            # X11 clipboard access
+            PODMAN_ARGS+=(
+                -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
+                -e "DISPLAY=${DISPLAY}"
+            )
+            if [[ -f "${HOME}/.Xauthority" ]]; then
+                PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority$(vol_flag "ro")")
+            fi
+        fi
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        # macOS: basic X11 support via XQuartz (if available)
+        if [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+            PODMAN_ARGS+=(
+                -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
+                -e "DISPLAY=${DISPLAY}"
+            )
         fi
     fi
 fi
 
 # Mount npm global packages (read-only) if available and not a system directory
 if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
-    PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global:ro,z")
+    # On macOS, only /Users/* or /private/* paths work with Podman VM
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        if [[ "$NPM_GLOBAL" == /Users/* || "$NPM_GLOBAL" == /private/* ]]; then
+            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+        else
+            log_warn "npm global prefix '$NPM_GLOBAL' not accessible in Podman VM, skipping"
+        fi
+    else
+        PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+    fi
 fi
 
-# Add firewall capabilities if firewall is enabled
+# Add firewall capabilities if firewall is enabled (Linux only)
 if ! $NO_FIREWALL; then
-    PODMAN_ARGS+=(
-        --cap-add=NET_ADMIN
-        --cap-add=NET_RAW
-    )
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        PODMAN_ARGS+=(
+            --cap-add=NET_ADMIN
+            --cap-add=NET_RAW
+        )
+    else
+        log_warn "Firewall feature is only supported on Linux, ignoring --with-firewall flag"
+        NO_FIREWALL=true
+    fi
 fi
 
 # Determine what command to run
@@ -417,6 +590,13 @@ log_info "Workspace: $WORKSPACE_DIR"
 log_info "Session: $SESSION_ID"
 log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
 log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
+
+# Debug mode: print the podman command
+if [[ -n "${DEBUG}" ]]; then
+    echo "DEBUG: podman run command:" >&2
+    printf '%q ' podman run "${PODMAN_ARGS[@]}" >&2
+    echo >&2
+fi
 
 # Run the container
 exec podman run "${PODMAN_ARGS[@]}"

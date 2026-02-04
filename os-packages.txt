@@ -19,7 +19,6 @@ vim-enhanced
 # Version control
 git
 gh
-tig
 
 # Node.js
 nodejs-npm
@@ -40,8 +39,6 @@ python3-virtualenv
 make
 gcc
 gcc-c++
-autoconf
-automake
 cmake
 pkg-config
 
@@ -50,11 +47,6 @@ openssl-devel
 libffi-devel
 zlib-devel
 sqlite-devel
-readline-devel
-
-# Additional language runtimes
-cargo
-golang
 
 # Clipboard tools (for image pasting support)
 xclip
@@ -63,52 +55,28 @@ wl-clipboard
 # Search tools (essential for code navigation)
 ripgrep
 fd-find
-fzf
-
-# Editors
-emacs-nox
-
-# Terminal/session management
-tmux
 
 # File utilities
 tree
 less
 unzip
-rsync
 xz
 which
 file
 
 # Development utilities
-htop
-strace
 diffutils
 patch
-entr
-bat
 ShellCheck
 
 # Network utilities
-wget
 openssh-clients
-
-# Documentation
-man-db
-man-pages
 
 # Database clients
 sqlite
 postgresql
-community-mysql
+mysql
 redis
-
-# Media processing (used by ffmpeg/imagemagick skills)
-ffmpeg
-ImageMagick
-
-# Document conversion (used by pandoc-wizard skill)
-pandoc
 
 # Diagram generation (commonly used for documentation)
 graphviz
@@ -117,9 +85,7 @@ graphviz
 ruff
 
 # Container/orchestration tools
-podman-remote
-kubernetes-client
-origin-clients
+kubernetes1.33-client
 
 # Configuration management (DevOps skills)
 ansible

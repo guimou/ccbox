@@ -18,6 +18,10 @@ RUN dnf upgrade -y && \
     dnf clean all && \
     rm -rf /var/cache/dnf /tmp/os-packages.txt
 
+# Install OpenShift CLI (oc) - not available in Fedora repos
+RUN curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+    | tar xzf - -C /usr/local/bin oc
+
 # Create non-root user 'claude' with UID 1000
 # Using UID 1000 for compatibility with --userns=keep-id
 RUN useradd -m -u 1000 -s /bin/bash claude && \

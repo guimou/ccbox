@@ -61,57 +61,41 @@ For local development, you can build the image locally:
 The container comes pre-installed with tools commonly used by Claude Code plugins and skills.
 
 ### Editors
-- **vim**, **nano**, **emacs** - Text editors for all preferences
+- **vim**, **nano** - Text editors
 
 ### Search & Navigation
 - **ripgrep** (`rg`) - Fast recursive grep
 - **fd** (`fd-find`) - User-friendly find alternative
-- **fzf** - Fuzzy finder for files and history
 - **tree** - Directory structure visualization
 
 ### Languages & Runtimes
 - **Node.js** with npm and pnpm
 - **Python 3** with pip and virtualenv
-- **Go** (golang)
-- **Rust** (cargo)
 
 ### Build Tools
-- **make**, **cmake**, **autoconf**, **automake**
+- **make**, **cmake** - Build systems
 - **gcc**, **g++** - C/C++ compilers
 - **pkg-config** - Library configuration
 
 ### Version Control
-- **git**, **gh** (GitHub CLI), **tig**
+- **git**, **gh** (GitHub CLI)
 
-### Terminal & Process
-- **tmux** - Terminal multiplexer
-- **htop** - Interactive process viewer
-- **strace** - System call tracer
-
-### Media Processing
-- **ffmpeg** - Video/audio processing
-- **ImageMagick** (`convert`) - Image manipulation
-
-### Document Processing
-- **pandoc** - Universal document converter
+### Diagram Generation
 - **graphviz** (`dot`) - Diagram generation
 
 ### Database Clients
 - **sqlite**, **psql** (PostgreSQL), **mysql**, **redis-cli**
 
-### DevOps & Containers
-- **podman-remote** - Container management
+### DevOps
 - **kubectl** - Kubernetes CLI
-- **oc** - OpenShift CLI
 - **ansible** - Configuration management
 
 ### Code Quality
 - **ruff** - Fast Python linter
 - **ShellCheck** - Shell script analyzer
-- **bat** - Cat with syntax highlighting
 
 ### Networking
-- **curl**, **wget** - HTTP clients
+- **curl** - HTTP client
 - **openssh-clients** - SSH/SCP
 - **bind-utils** - DNS tools (dig, nslookup)
 
