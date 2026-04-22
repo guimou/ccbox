@@ -63,6 +63,7 @@ unzip
 xz
 which
 file
+poppler-utils
 
 # Development utilities
 diffutils
