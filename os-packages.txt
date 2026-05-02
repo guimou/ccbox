@@ -95,5 +95,5 @@ ansible
 # Terminal multiplexer (for agent teams split-pane mode)
 tmux
 
-# Headless browser (for Playwright MCP, browser automation)
-chromium-headless
+# Browser (for Playwright MCP, browser automation)
+chromium
