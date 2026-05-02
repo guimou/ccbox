@@ -94,7 +94,7 @@ The container comes pre-installed with tools commonly used by Claude Code plugin
 - **sqlite**, **psql** (PostgreSQL), **mysql**, **redis-cli**
 
 ### Browser (Headless)
-- **chromium-headless** - System Chromium for Playwright MCP and browser automation (requires `--executable-path` in MCP config)
+- **chromium** - System Chromium for Playwright MCP and browser automation (auto-configured via environment variables and config file)
 
 ### DevOps
 - **helm** - Kubernetes package manager
@@ -133,6 +133,24 @@ echo "<version>" > CLAUDE_VERSION
 ./ccbox  # Will use the specified version
 ```
 The `--claude-version` CLI flag takes precedence over the file.
+
+### Playwright MCP Plugin
+The container is pre-configured for the official [Playwright MCP plugin](https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/playwright). System Chromium is used instead of Playwright's bundled browser download.
+
+When enabling the plugin through Claude Code, it works out of the box via environment variables (`PLAYWRIGHT_MCP_EXECUTABLE_PATH`, `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`).
+
+If you encounter issues with browser detection, pass the config file explicitly in your project's MCP config:
+```json
+{
+  "playwright": {
+    "command": "npx",
+    "args": [
+      "@playwright/mcp@latest",
+      "--config", "/home/claude/.playwright-mcp-config.json"
+    ]
+  }
+}
+```
 
 ### Vertex AI Support
 Set environment variables before launching to use Vertex AI:

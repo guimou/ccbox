@@ -99,6 +99,25 @@ RUN chmod +x /home/claude/.ccbox-tmux-monitor.sh
 ENV CHROME_PATH="/usr/lib64/chromium-browser/chromium-browser"
 ENV CHROME_FLAGS="--no-sandbox --disable-dev-shm-usage"
 
+# Playwright MCP: use system Chromium, skip bundled browser download
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/usr/lib64/chromium-browser/chromium-browser"
+ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH="/usr/lib64/chromium-browser/chromium-browser"
+
+# Playwright MCP config file for reliable system browser usage
+# (works around known --executable-path CLI bugs in some @playwright/mcp versions)
+RUN cat > /home/claude/.playwright-mcp-config.json << 'PWCONFIG'
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "executablePath": "/usr/lib64/chromium-browser/chromium-browser",
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    }
+  }
+}
+PWCONFIG
+
 # Set working directory to workspace
 WORKDIR /workspace
 
