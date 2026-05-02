@@ -33,8 +33,9 @@ RUN useradd -m -u 1000 -s /bin/bash claude && \
              /home/claude/.claude/todos \
              /home/claude/.claude/plans \
              /home/claude/.claude/tasks \
-             /home/claude/.claude/teams && \
-    chown -R claude:claude /workspace /home/claude/.claude
+             /home/claude/.claude/teams \
+             /home/claude/.config && \
+    chown -R claude:claude /workspace /home/claude/.claude /home/claude/.config
 
 # Copy firewall configuration
 COPY firewall-domains.txt /etc/ccbox/firewall-domains.txt
