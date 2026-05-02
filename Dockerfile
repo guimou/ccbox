@@ -46,6 +46,9 @@ RUN chmod +x /usr/local/bin/init-firewall.sh
 RUN echo "claude ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/sudoers.d/claude && \
     chmod 0440 /etc/sudoers.d/claude
 
+# Install uv (fast Python package manager, includes uvx)
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
 # Install Claude Code using native installer
 # Switch to claude user for installation
 USER claude
