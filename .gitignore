@@ -1,2 +1,5 @@
 # Claude Code local settings
 .claude/
+
+# Playwright MCP logs
+.playwright-mcp/
