@@ -78,6 +78,7 @@ The container comes pre-installed with tools commonly used by Claude Code plugin
 ### Languages & Runtimes
 - **Node.js** with npm and pnpm
 - **Python 3** with pip and virtualenv
+- **uv** (`uv`, `uvx`) - Fast Python package/project manager
 
 ### Build Tools
 - **make**, **cmake** - Build systems
