@@ -85,12 +85,22 @@ graphviz
 # Code quality tools (used by plugins)
 ruff
 
+# Process/port inspection
+lsof
+
+# YAML processing (complement to jq for Helm/kubectl workflows)
+yq
+
 # Container/orchestration tools
 helm
 kubernetes1.33-client
 
 # Configuration management (DevOps skills)
 ansible
+
+# Sandbox support (Claude Code subprocess isolation)
+bubblewrap
+socat
 
 # Terminal multiplexer (for agent teams split-pane mode)
 tmux

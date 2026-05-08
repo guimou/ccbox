@@ -122,6 +122,7 @@ ensure_global_config() {
     [[ -d "${config_dir}/skills" ]] || mkdir -p "${config_dir}/skills"
     [[ -d "${config_dir}/agents" ]] || mkdir -p "${config_dir}/agents"
     [[ -d "${config_dir}/rules" ]] || mkdir -p "${config_dir}/rules"
+    [[ -d "${config_dir}/themes" ]] || mkdir -p "${config_dir}/themes"
     # Additional global directories for core features
     [[ -d "${config_dir}/file-history" ]] || mkdir -p "${config_dir}/file-history"
     [[ -d "${config_dir}/paste-cache" ]] || mkdir -p "${config_dir}/paste-cache"
@@ -513,6 +514,7 @@ PODMAN_ARGS=(
     -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/themes:/home/claude/.claude/themes$(vol_flag "")"
     # Additional global directories for core features
     -v "${CLAUDE_CONFIG_DIR}/file-history:/home/claude/.claude/file-history$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/claude/.claude/paste-cache$(vol_flag "")"
