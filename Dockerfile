@@ -29,11 +29,24 @@ RUN useradd -m -u 1000 -s /bin/bash claude && \
              /home/claude/.claude/projects/-workspace \
              /home/claude/.claude/plugins \
              /home/claude/.claude/hooks \
+             /home/claude/.claude/commands \
+             /home/claude/.claude/skills \
+             /home/claude/.claude/agents \
+             /home/claude/.claude/rules \
+             /home/claude/.claude/themes \
              /home/claude/.claude/statsig \
              /home/claude/.claude/todos \
              /home/claude/.claude/plans \
              /home/claude/.claude/tasks \
              /home/claude/.claude/teams \
+             /home/claude/.claude/file-history \
+             /home/claude/.claude/paste-cache \
+             /home/claude/.claude/cache \
+             /home/claude/.claude/backups \
+             /home/claude/.claude/shell-snapshots \
+             /home/claude/.claude/session-env \
+             /home/claude/.claude/logs \
+             /home/claude/.claude/debug \
              /home/claude/.config && \
     chown -R claude:claude /workspace /home/claude/.claude /home/claude/.config
 
@@ -48,6 +61,13 @@ RUN echo "claude ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/s
 
 # Install uv (fast Python package manager, includes uvx)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
+# Pre-install common Python dev tools (repeatedly needed across projects)
+RUN pip install --break-system-packages pytest pytest-asyncio mypy httpx ruff pyright pytest-cov
+
+# Pre-install common Node.js dev tools
+# LSP servers (required by Claude Code LSP plugins), formatter, TS runner
+RUN npm install -g typescript typescript-language-server prettier tsx yarn
 
 # Install Claude Code using native installer
 # Switch to claude user for installation

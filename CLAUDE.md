@@ -76,9 +76,23 @@ The container comes pre-installed with tools commonly used by Claude Code plugin
 - **tree** - Directory structure visualization
 
 ### Languages & Runtimes
-- **Node.js** with npm and pnpm
+- **Node.js** with npm, pnpm, and yarn
 - **Python 3** with pip and virtualenv
 - **uv** (`uv`, `uvx`) - Fast Python package/project manager
+
+### LSP Servers (for Claude Code LSP plugins)
+- **typescript-language-server** + **typescript** - TypeScript/JavaScript/React code intelligence
+- **pyright** - Python code intelligence and type checking
+
+### TypeScript/JavaScript Tools
+- **prettier** - Code formatter
+- **tsx** - Run TypeScript files directly
+
+### Python Tools
+- **pytest** with pytest-asyncio and pytest-cov - Test runner, async support, and coverage
+- **mypy** - Static type checker
+- **httpx** - Modern HTTP client
+- **ruff** - Fast Python linter (also available as `python3 -m ruff`)
 
 ### Build Tools
 - **make**, **cmake** - Build systems
@@ -105,6 +119,12 @@ The container comes pre-installed with tools commonly used by Claude Code plugin
 ### Code Quality
 - **ruff** - Fast Python linter
 - **ShellCheck** - Shell script analyzer
+- **prettier** - TypeScript/JavaScript formatter
+
+### Process & Data Tools
+- **lsof** - Process/port inspection
+- **jq** - JSON processing
+- **yq** - YAML processing
 
 ### Networking
 - **curl** - HTTP client
