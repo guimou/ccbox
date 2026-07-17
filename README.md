@@ -71,6 +71,15 @@ ccbox --build
 # Use locally-built image
 ccbox --local
 
+# Enable agent teams (experimental)
+ccbox --with-teams
+
+# Agent teams with split-pane mode (tmux)
+ccbox --with-teams --with-tmux
+
+# Start with all customizations disabled (troubleshooting)
+ccbox --safe-mode
+
 # Disable clipboard access (for extra security)
 ccbox --no-clipboard
 
@@ -109,9 +118,18 @@ echo "your-package" >> os-packages.txt
 
 ## Configuration
 
-### Vertex AI
+### API Provider
 
-To use Claude via Google Cloud Vertex AI:
+ccbox automatically forwards all `ANTHROPIC_*` and `CLAUDE_CODE_*` environment variables from the host into the container. Set the appropriate variables for your provider before launching.
+
+**Direct Anthropic API:**
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+ccbox
+```
+
+**Google Cloud Vertex AI:**
 
 ```bash
 export CLAUDE_CODE_USE_VERTEX=1
@@ -120,6 +138,32 @@ ccbox
 ```
 
 Your gcloud credentials (`~/.config/gcloud`) are mounted read-only.
+
+**AWS Bedrock:**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export AWS_REGION="us-east-1"
+ccbox
+```
+
+AWS credential variables (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, etc.) are also forwarded automatically.
+
+**Per-project provider selection:**
+
+Use shell aliases, inline variables, or [direnv](https://direnv.net/) to switch providers per project:
+
+```bash
+# Shell aliases in ~/.bashrc
+alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox'
+alias ccbox-anthropic='ANTHROPIC_API_KEY="sk-ant-..." ccbox'
+
+# Inline (no persistent state)
+ANTHROPIC_API_KEY="sk-ant-..." ccbox
+
+# direnv (.envrc in project directory — auto-sets vars on cd)
+# echo 'export ANTHROPIC_API_KEY="sk-ant-..."' > .envrc && direnv allow
+```
 
 ### Pin a version (for teams)
 
@@ -214,6 +258,8 @@ flowchart TB
 | `~/.claude/commands/` | Global slash commands | Shared |
 | `~/.claude/skills/` | Global skills | Shared |
 | `~/.claude/agents/` | Global subagents | Shared |
+| `~/.claude/workflows/` | Saved workflow scripts | Shared |
+| `~/.claude/daemon/` | Background agent daemon state | Shared |
 | **Memory & Rules** | | |
 | `~/.claude/CLAUDE.md` | Global memory/instructions | Shared |
 | `~/.claude/rules/` | Global rules | Shared |
@@ -268,10 +314,15 @@ To disable clipboard access: `ccbox --no-clipboard`
 
 When launched with `--with-firewall`, outbound connections are restricted to:
 
-- Anthropic APIs (`api.anthropic.com`, `statsig.anthropic.com`)
+- Anthropic APIs (`api.anthropic.com`, `statsig.anthropic.com`, `claude.ai`)
 - GitHub (`github.com`, `api.github.com`, plus their IP ranges)
 - npm registry (`registry.npmjs.org`)
+- Python packages (`pypi.org`, `files.pythonhosted.org`)
+- Rust packages (`crates.io`, `static.crates.io`)
+- Documentation (`code.claude.com`)
 - Sentry (`sentry.io`)
+
+**Limitations:** Web search, web fetch, and HTTP-based MCP servers will **not** work with the firewall enabled, as they require access to arbitrary domains. Only stdio MCP servers (local processes) function behind the firewall.
 
 The firewall uses iptables/ipset and requires `NET_ADMIN` and `NET_RAW` capabilities (added automatically).
 

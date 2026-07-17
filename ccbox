@@ -128,6 +128,8 @@ ensure_global_config() {
     [[ -d "${config_dir}/paste-cache" ]] || mkdir -p "${config_dir}/paste-cache"
     [[ -d "${config_dir}/cache" ]] || mkdir -p "${config_dir}/cache"
     [[ -d "${config_dir}/backups" ]] || mkdir -p "${config_dir}/backups"
+    [[ -d "${config_dir}/workflows" ]] || mkdir -p "${config_dir}/workflows"
+    [[ -d "${config_dir}/daemon" ]] || mkdir -p "${config_dir}/daemon"
     [[ -f "${config_dir}/stats-cache.json" ]] || echo '{}' > "${config_dir}/stats-cache.json"
 }
 
@@ -231,6 +233,7 @@ LIST_SESSIONS=false
 SHOW_INSTALL=false
 CLAUDE_VERSION=""
 NPM_GLOBAL=""
+SAFE_MODE=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -261,6 +264,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --with-tmux)
             WITH_TMUX=true
+            shift
+            ;;
+        --safe-mode)
+            SAFE_MODE=true
             shift
             ;;
         --list-sessions)
@@ -316,6 +323,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --with-firewall          Enable network firewall restrictions"
             echo "  --with-teams             Enable agent teams (experimental)"
             echo "  --with-tmux              Run claude inside tmux (for split-pane agent teams)"
+            echo "  --safe-mode              Start with all customizations disabled"
             echo "  --no-clipboard           Disable clipboard access (for extra security)"
             echo "  --npm-global PATH        Mount npm global prefix (auto-detected if not set)"
             echo "  --with-github            Explicitly enable GitHub token injection (auto by default)"
@@ -521,6 +529,8 @@ PODMAN_ARGS=(
     -v "${CLAUDE_CONFIG_DIR}/cache:/home/claude/.claude/cache$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/backups:/home/claude/.claude/backups$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/claude/.claude/stats-cache.json$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/workflows:/home/claude/.claude/workflows$(vol_flag "")"
+    -v "${CLAUDE_CONFIG_DIR}/daemon:/home/claude/.claude/daemon$(vol_flag "")"
     # Project-specific data (isolated per project)
     -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
     -v "${PROJECT_DATA_DIR}/projects:/home/claude/.claude/projects$(vol_flag "")"
@@ -560,6 +570,11 @@ if [[ -f "${CLAUDE_CONFIG_DIR}/RULES.md" ]]; then
     PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/claude/.claude/RULES.md$(vol_flag "ro")")
 fi
 
+# Enterprise managed settings (read-only)
+if [[ -d /etc/claude-code ]]; then
+    PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
+fi
+
 # Linux-specific mounts and environment variables
 if [[ "$OS_TYPE" == "linux" ]]; then
     # Timezone
@@ -577,13 +592,27 @@ if [[ "$OS_TYPE" == "linux" ]]; then
     fi
 fi
 
-# Vertex AI environment variables (if set)
-if [[ -n "$CLAUDE_CODE_USE_VERTEX" ]]; then
-    PODMAN_ARGS+=(-e CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX}")
-fi
-if [[ -n "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
-    PODMAN_ARGS+=(-e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}")
-fi
+# Generic passthrough: forward all ANTHROPIC_* and CLAUDE_CODE_* env vars from host
+while IFS='=' read -r name value; do
+    PODMAN_ARGS+=(-e "${name}=${value}")
+done < <(env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_AX_|CLAUDE_ENABLE_|CLAUDE_AUTOCOMPACT_)')
+
+# Also pass through specific non-prefixed vars if set
+for var in DISABLE_AUTOUPDATER DISABLE_AUTO_COMPACT MAX_THINKING_TOKENS \
+           MCP_TIMEOUT MCP_TOOL_TIMEOUT MAX_MCP_OUTPUT_TOKENS \
+           API_TIMEOUT_MS API_FORCE_IDLE_TIMEOUT BASH_DEFAULT_TIMEOUT_MS \
+           BASH_MAX_TIMEOUT_MS BASH_MAX_OUTPUT_LENGTH \
+           ENABLE_TOOL_SEARCH NODE_OPTIONS \
+           NO_COLOR FORCE_COLOR \
+           AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+           AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK \
+           OTEL_METRICS_EXPORTER OTEL_LOG_ASSISTANT_RESPONSES \
+           OTEL_LOG_USER_PROMPTS OTEL_LOG_TOOL_DETAILS \
+           OTEL_RESOURCE_ATTRIBUTES; do
+    if [[ -n "${!var}" ]]; then
+        PODMAN_ARGS+=(-e "${var}=${!var}")
+    fi
+done
 
 # Agent teams (experimental feature)
 if $WITH_TEAMS; then
@@ -674,6 +703,11 @@ if ! $NO_FIREWALL; then
     fi
 fi
 
+# Safe mode: disable all customizations (CLAUDE.md, plugins, skills, hooks, MCP servers)
+if $SAFE_MODE; then
+    EXTRA_ARGS+=(--safe-mode)
+fi
+
 # Build the claude launch command
 # Wraps claude in tmux if --with-tmux is set, with optional firewall init
 # Claude must be the direct process in the tmux pane (not wrapped in bash)
@@ -702,6 +736,7 @@ log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'
 log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
 log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
 log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
+log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
 if $NO_GITHUB; then
     log_info "GitHub: disabled"
 elif [[ -n "$GH_TOKEN_VALUE" ]]; then
