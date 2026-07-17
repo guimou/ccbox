@@ -1,7 +1,7 @@
 # Claude Code Development Container
-# Based on Fedora 43 for compatibility with host environment
+# Based on Fedora 44
 
-FROM quay.io/fedora/fedora:43
+FROM quay.io/fedora/fedora:44
 
 LABEL maintainer="guimou"
 LABEL description="Containerized Claude Code development environment"
