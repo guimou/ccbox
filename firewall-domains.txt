@@ -13,3 +13,21 @@ api.github.com
 
 # npm registry (for potential package installations)
 registry.npmjs.org
+
+# Claude.ai (OAuth login, install script, Remote Control)
+claude.ai
+
+# Documentation (docs.anthropic.com redirects here)
+code.claude.com
+
+# Python packages (pip/uv installs)
+pypi.org
+files.pythonhosted.org
+
+# Rust packages (cargo installs)
+crates.io
+static.crates.io
+
+# NOTE: Web search, web fetch, and HTTP-based MCP servers will NOT work
+# with the firewall enabled, as they require access to arbitrary domains.
+# Only stdio MCP servers (local processes) function behind the firewall.

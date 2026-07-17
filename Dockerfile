@@ -1,7 +1,7 @@
 # Claude Code Development Container
-# Based on Fedora 43 for compatibility with host environment
+# Based on Fedora 44
 
-FROM quay.io/fedora/fedora:43
+FROM quay.io/fedora/fedora:44
 
 LABEL maintainer="guimou"
 LABEL description="Containerized Claude Code development environment"
@@ -47,6 +47,8 @@ RUN useradd -m -u 1000 -s /bin/bash claude && \
              /home/claude/.claude/session-env \
              /home/claude/.claude/logs \
              /home/claude/.claude/debug \
+             /home/claude/.claude/workflows \
+             /home/claude/.claude/daemon \
              /home/claude/.config && \
     chown -R claude:claude /workspace /home/claude/.claude /home/claude/.config
 
@@ -89,6 +91,12 @@ RUN if [ -z "${CLAUDE_VERSION}" ]; then \
     else \
         curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"; \
     fi
+
+# Disable auto-updater in container (version controlled via image build)
+ENV DISABLE_AUTOUPDATER=1
+
+# Match official devcontainer memory settings
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 
 # Add Claude to PATH (native installer puts it in ~/.local/bin)
 # Also add npm-global/bin for host-mounted npm packages

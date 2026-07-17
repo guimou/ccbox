@@ -20,8 +20,10 @@ vim-enhanced
 git
 gh
 
-# Node.js
-nodejs-npm
+# Node.js (Fedora 44+ uses versioned nodejs packages)
+nodejs24
+nodejs24-bin
+nodejs24-npm-bin
 pnpm
 
 # Networking/firewall
@@ -93,7 +95,7 @@ yq
 
 # Container/orchestration tools
 helm
-kubernetes1.33-client
+kubernetes1.35-client
 
 # Configuration management (DevOps skills)
 ansible
