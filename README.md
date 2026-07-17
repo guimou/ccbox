@@ -104,7 +104,7 @@ The container includes common development tools that Claude Code can use directl
 | **Version Control** | git, gh (GitHub CLI) |
 | **Code Quality** | ruff, ShellCheck |
 | **Database Clients** | sqlite, psql, mysql, redis-cli |
-| **DevOps** | kubectl, ansible |
+| **DevOps** | helm, kubectl, ansible |
 | **Networking** | curl, openssh-clients, bind-utils |
 | **Other** | graphviz, jq, xclip, wl-clipboard |
 

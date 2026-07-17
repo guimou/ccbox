@@ -23,6 +23,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox`.
 # Launch with network firewall
 ./ccbox --with-firewall
 
+# Start with all customizations disabled (troubleshooting)
+./ccbox --safe-mode
+
 # Disable clipboard access (for extra security)
 ./ccbox --no-clipboard
 
@@ -55,7 +58,7 @@ For local development, you can build the image locally:
 
 ## File Structure
 
-- `Dockerfile` - Container image definition (Fedora 43 base)
+- `Dockerfile` - Container image definition (Fedora 44 base)
 - `os-packages.txt` - DNF packages to install (one per line)
 - `firewall-domains.txt` - Allowed network domains (one per line)
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
