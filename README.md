@@ -259,7 +259,7 @@ flowchart TB
 | `~/.claude/skills/` | Global skills | Shared |
 | `~/.claude/agents/` | Global subagents | Shared |
 | `~/.claude/workflows/` | Saved workflow scripts | Shared |
-| `~/.claude/daemon/` | Background agent daemon state | Shared |
+| `~/.claude/daemon/` | Background agent daemon state | Per-container (not mounted) |
 | **Memory & Rules** | | |
 | `~/.claude/CLAUDE.md` | Global memory/instructions | Shared |
 | `~/.claude/rules/` | Global rules | Shared |
@@ -267,6 +267,8 @@ flowchart TB
 | `~/.claude/ccbox-projects/{name}_{hash}/` | History, todos, plans, tasks, plugins | Per-project |
 
 Each project directory gets isolated session data based on a hash of the workspace path, so you can have multiple projects with the same name in different locations. Multiple concurrent sessions in the same project share this data.
+
+The background agent daemon (`~/.claude/daemon/`) is deliberately not shared with the host: its lock file stores a PID, which is not valid across PID namespaces, so sharing it would let host and container daemons take over and kill each other. Each container runs its own isolated daemon instead. Consequence: background agents and sessions started inside ccbox die with the container and are not visible from the host (and vice versa).
 
 ## Platform Notes
 
