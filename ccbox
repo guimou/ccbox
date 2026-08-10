@@ -129,7 +129,6 @@ ensure_global_config() {
     [[ -d "${config_dir}/cache" ]] || mkdir -p "${config_dir}/cache"
     [[ -d "${config_dir}/backups" ]] || mkdir -p "${config_dir}/backups"
     [[ -d "${config_dir}/workflows" ]] || mkdir -p "${config_dir}/workflows"
-    [[ -d "${config_dir}/daemon" ]] || mkdir -p "${config_dir}/daemon"
     [[ -f "${config_dir}/stats-cache.json" ]] || echo '{}' > "${config_dir}/stats-cache.json"
 }
 
@@ -530,7 +529,10 @@ PODMAN_ARGS=(
     -v "${CLAUDE_CONFIG_DIR}/backups:/home/claude/.claude/backups$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/claude/.claude/stats-cache.json$(vol_flag "")"
     -v "${CLAUDE_CONFIG_DIR}/workflows:/home/claude/.claude/workflows$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/daemon:/home/claude/.claude/daemon$(vol_flag "")"
+    # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
+    # stores a PID, which is meaningless across PID namespaces (host vs container,
+    # or container vs container). Each container uses its own ephemeral copy
+    # pre-created in the image, so daemons never clobber each other.
     # Project-specific data (isolated per project)
     -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
     -v "${PROJECT_DATA_DIR}/projects:/home/claude/.claude/projects$(vol_flag "")"
