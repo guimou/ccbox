@@ -85,6 +85,9 @@ ccbox --no-clipboard
 
 # List active sessions for the current project
 ccbox --list-sessions
+
+# Use a separate account profile (isolated credentials and /usage statistics)
+ccbox --profile work
 ```
 
 You can run multiple sessions simultaneously in the same project directory. Each session gets a unique container, while sharing project data (history, todos, plans, tasks).
@@ -165,6 +168,33 @@ ANTHROPIC_API_KEY="sk-ant-..." ccbox
 # echo 'export ANTHROPIC_API_KEY="sk-ant-..."' > .envrc && direnv allow
 ```
 
+### Account Profiles
+
+If you use ccbox with more than one account (e.g. one on Vertex AI and one on Anthropic), a single shared `~/.claude` directory blends their credentials, session history, and `/usage` statistics together. The `--profile` flag keeps each account fully separate:
+
+```bash
+# Vertex account
+CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox --profile vertex
+
+# Anthropic account
+ccbox --profile anthropic
+
+# No flag = default behavior, shared ~/.claude (unchanged)
+ccbox
+```
+
+Each profile stores its account-specific state under `~/.claude-profiles/<name>/`:
+
+- **Isolated per profile**: credentials (`.credentials.json`, `.claude.json`), usage statistics (`stats-cache.json`, `statsig/`, session transcripts — what `/usage` reads), project data (history, todos, plans, tasks, plugins), and caches
+- **Shared across profiles**: settings, keybindings, CLAUDE.md, hooks, commands, skills, agents, rules, themes, and workflows
+
+A new profile starts unauthenticated — run `/login` inside the session (or set provider environment variables) the first time. Profile names must be lowercase letters, digits, dashes, or underscores. Combine with shell aliases for convenience:
+
+```bash
+alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox --profile vertex'
+alias ccbox-anthropic='ccbox --profile anthropic'
+```
+
 ### Pin a version (for teams)
 
 Create a `CLAUDE_VERSION` file in the ccbox directory:
@@ -214,7 +244,7 @@ flowchart TB
     subgraph Host["Host Machine"]
         CWD["Current Directory"]
         GlobalConfig["~/.claude/"]
-        ProjectData["~/.claude/ccbox-projects/"]
+        AccountData["~/.claude/ (default)<br/>or ~/.claude-profiles/name/<br/>(with --profile)"]
         GCloud["~/.config/gcloud/"]
     end
 
@@ -227,16 +257,22 @@ flowchart TB
     subgraph GlobalMounts["Global Mounts (shared)"]
         direction LR
         Settings["settings.json<br/>settings.local.json<br/>keybindings.json"]
-        Auth[".credentials.json"]
         Extensions["hooks/ commands/<br/>skills/ agents/"]
         Memory["CLAUDE.md<br/>rules/"]
-        Cache["statsig/"]
+    end
+
+    subgraph AccountMounts["Account Mounts (per-profile)"]
+        direction LR
+        Auth[".credentials.json<br/>.claude.json"]
+        Usage["stats-cache.json<br/>statsig/"]
+        ProjectData["ccbox-projects/<br/>(history, todos, plans,<br/>tasks, plugins per-project)"]
     end
 
     CWD -->|"mount (rw)"| Workspace
     GlobalConfig --> GlobalMounts
     GlobalMounts --> ClaudeHome
-    ProjectData -->|"history, todos,<br/>plans, tasks,<br/>plugins (per-project)"| ClaudeHome
+    AccountData --> AccountMounts
+    AccountMounts --> ClaudeHome
     GCloud -->|"mount (ro)"| Container
 
     ClaudeCode --> Workspace
@@ -251,8 +287,11 @@ flowchart TB
 | `~/.claude/settings.local.json` | Local settings (not synced) | Shared |
 | `~/.claude/keybindings.json` | Keyboard shortcuts | Shared |
 | **Authentication** | | |
-| `~/.claude/.credentials.json` | API credentials | Shared |
-| `~/.claude.json` | Claude config | Shared |
+| `~/.claude/.credentials.json` | API credentials | Per profile¹ |
+| `~/.claude.json` | Claude config | Per profile¹ |
+| **Usage Statistics** | | |
+| `~/.claude/stats-cache.json` | `/usage` statistics cache | Per profile¹ |
+| `~/.claude/statsig/` | Feature flags / telemetry | Per profile¹ |
 | **Extensions** | | |
 | `~/.claude/hooks/` | Custom hooks | Shared |
 | `~/.claude/commands/` | Global slash commands | Shared |
@@ -264,7 +303,9 @@ flowchart TB
 | `~/.claude/CLAUDE.md` | Global memory/instructions | Shared |
 | `~/.claude/rules/` | Global rules | Shared |
 | **Project Data** | | |
-| `~/.claude/ccbox-projects/{name}_{hash}/` | History, todos, plans, tasks, plugins | Per-project |
+| `~/.claude/ccbox-projects/{name}_{hash}/` | History, todos, plans, tasks, plugins | Per-project¹ |
+
+¹ With `--profile <name>`, these live under `~/.claude-profiles/<name>/` instead (e.g. `~/.claude-profiles/<name>/.credentials.json`, `~/.claude-profiles/<name>/ccbox-projects/`), so each account profile keeps its own credentials, session history, and `/usage` statistics. See [Account Profiles](#account-profiles).
 
 Each project directory gets isolated session data based on a hash of the workspace path, so you can have multiple projects with the same name in different locations. Multiple concurrent sessions in the same project share this data.
 
