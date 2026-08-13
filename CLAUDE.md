@@ -40,6 +40,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox`.
 
 # List active sessions for current project
 ./ccbox --list-sessions
+
+# Use a separate account profile (isolated credentials and /usage statistics)
+./ccbox --profile work
 ```
 
 Multiple sessions can run simultaneously in the same project. Each session gets a unique container name with a session ID suffix, while sharing project data (history, todos, plans, tasks).
@@ -192,17 +195,18 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
 - **User**: `claude` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
   - Current directory → `/workspace`
-  - Global settings (shared): `~/.claude/{settings.json,settings.local.json,.credentials.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`
-  - Project data (isolated): `~/.claude/ccbox-projects/{project}_{hash}/` → session data, history, todos, plugins
-  - `~/.claude.json` → `/home/claude/.claude.json`
+  - Global settings (shared): `~/.claude/{settings.json,settings.local.json,keybindings.json,CLAUDE.md,hooks,commands,skills,agents,rules,themes,workflows}`
+  - Account state (per-profile with `--profile`): `.credentials.json`, `.claude.json`, `statsig/`, `stats-cache.json`, caches — from `~/.claude/` by default or `~/.claude-profiles/{name}/` with `--profile {name}`
+  - Project data (isolated): `{account-dir}/ccbox-projects/{project}_{hash}/` → session data, history, todos, plugins
   - `~/.config/gcloud` → `/home/claude/.config/gcloud` (read-only)
   - npm global prefix → `/home/claude/.npm-global` (read-only, auto-detected)
   - PulseAudio socket (for audio support)
   - `/etc/localtime` (for timezone sync)
 - **SELinux**: Uses `:z` volume labels for shared relabeling (supports multi-session)
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
-- **Project Isolation**: Each project gets its own history and session data in `~/.claude/ccbox-projects/`
-- **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`ccbox-{project}-{hash}-{session-id}`)
+- **Project Isolation**: Each project gets its own history and session data in `~/.claude/ccbox-projects/` (or `~/.claude-profiles/{name}/ccbox-projects/` with `--profile`)
+- **Account Profiles**: `--profile {name}` isolates credentials, session history, and `/usage` statistics per account under `~/.claude-profiles/{name}/`, while settings/skills/hooks stay shared; useful when using multiple accounts or providers
+- **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`ccbox-{project}-{hash}[-{profile}]-{session-id}`)
 
 ## Clipboard Support
 
