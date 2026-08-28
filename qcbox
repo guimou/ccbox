@@ -65,17 +65,17 @@ harness_setup_project() {
 harness_mounts() {
     PODMAN_ARGS+=(
         # Global settings, credentials and memory (shared across all projects)
-        -v "${QWEN_CONFIG_DIR}/settings.json:/home/claude/.qwen/settings.json$(vol_flag "")"
-        -v "${QWEN_CONFIG_DIR}/oauth_creds.json:/home/claude/.qwen/oauth_creds.json$(vol_flag "")"
-        -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/claude/.qwen/QWEN.md$(vol_flag "")"
+        -v "${QWEN_CONFIG_DIR}/settings.json:/home/coder/.qwen/settings.json$(vol_flag "")"
+        -v "${QWEN_CONFIG_DIR}/oauth_creds.json:/home/coder/.qwen/oauth_creds.json$(vol_flag "")"
+        -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/coder/.qwen/QWEN.md$(vol_flag "")"
         # Project-specific state (isolated per project)
-        -v "${PROJECT_DATA_DIR}/tmp:/home/claude/.qwen/tmp$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/file-history:/home/claude/.qwen/file-history$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/tmp:/home/coder/.qwen/tmp$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/file-history:/home/coder/.qwen/file-history$(vol_flag "")"
     )
 
     # Home-level env file if the user maintains one (read-only)
     if [[ -f "${QWEN_CONFIG_DIR}/.env" ]]; then
-        PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/.env:/home/claude/.qwen/.env$(vol_flag "ro")")
+        PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/.env:/home/coder/.qwen/.env$(vol_flag "ro")")
     fi
 }
 

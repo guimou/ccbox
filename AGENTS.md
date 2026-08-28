@@ -194,7 +194,7 @@ If you encounter issues with browser detection, pass the config file explicitly 
     "command": "npx",
     "args": [
       "@playwright/mcp@latest",
-      "--config", "/home/claude/.playwright-mcp-config.json"
+      "--config", "/home/coder/.playwright-mcp-config.json"
     ]
   }
 }
@@ -218,16 +218,16 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
 
 - **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox` (CI/CD published)
 - **Base**: `quay.io/fedora/fedora:44`
-- **User**: `claude` (UID 1000) for `--userns=keep-id` compatibility
+- **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
   - Current directory → `/workspace`
   - Global settings (shared): `~/.claude/{settings.json,settings.local.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`
   - Project data (isolated): `~/.claude/ccbox-projects/{project}_{hash}/` → session data, history, todos, plugins
-  - `~/.claude.json` → `/home/claude/.claude.json`
-  - `~/.claude/.credentials.json` → `/home/claude/.claude/.credentials.json` (read-write, only with `--with-credentials`)
-  - `~/.config/gcloud` → `/home/claude/.config/gcloud` (read-only, only with `--with-gcloud`)
-  - `~/.gitconfig` → `/home/claude/.gitconfig` (read-only, only with `--with-gitconfig`)
-  - npm global prefix → `/home/claude/.npm-global` (read-only, auto-detected)
+  - `~/.claude.json` → `/home/coder/.claude.json`
+  - `~/.claude/.credentials.json` → `/home/coder/.claude/.credentials.json` (read-write, only with `--with-credentials`)
+  - `~/.config/gcloud` → `/home/coder/.config/gcloud` (read-only, only with `--with-gcloud`)
+  - `~/.gitconfig` → `/home/coder/.gitconfig` (read-only, only with `--with-gitconfig`)
+  - npm global prefix → `/home/coder/.npm-global` (read-only, auto-detected)
   - PulseAudio socket (for audio support)
   - `/etc/localtime` (for timezone sync)
 - **SELinux**: Uses `:z` volume labels for shared relabeling (supports multi-session)

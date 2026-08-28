@@ -206,7 +206,7 @@ If browser detection fails, pass the config file explicitly in your project's MC
     "command": "npx",
     "args": [
       "@playwright/mcp@latest",
-      "--config", "/home/claude/.playwright-mcp-config.json"
+      "--config", "/home/coder/.playwright-mcp-config.json"
     ]
   }
 }

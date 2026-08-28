@@ -501,7 +501,7 @@ box_main() {
     # Add optional mounts that may not exist on all systems
     if $WITH_GCLOUD; then
         if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
-            PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
+            PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/coder/.config/gcloud$(vol_flag "ro")")
         else
             log_warn "$GOOGLE_CONFIG_DIR not found on host, --with-gcloud ignored"
             WITH_GCLOUD=false
@@ -510,7 +510,7 @@ box_main() {
 
     if $WITH_GITCONFIG; then
         if [[ -f "${HOME}/.gitconfig" ]]; then
-            PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig$(vol_flag "ro")")
+            PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/coder/.gitconfig$(vol_flag "ro")")
         else
             log_warn "${HOME}/.gitconfig not found on host, --with-gitconfig ignored"
             WITH_GITCONFIG=false
@@ -565,7 +565,7 @@ box_main() {
                     -e "DISPLAY=${DISPLAY}"
                 )
                 if [[ -f "${HOME}/.Xauthority" ]]; then
-                    PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority$(vol_flag "ro")")
+                    PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/coder/.Xauthority$(vol_flag "ro")")
                 fi
             fi
         elif [[ "$OS_TYPE" == "macos" ]]; then
@@ -584,12 +584,12 @@ box_main() {
         # On macOS, only /Users/* or /private/* paths work with Podman VM
         if [[ "$OS_TYPE" == "macos" ]]; then
             if [[ "$NPM_GLOBAL" == /Users/* || "$NPM_GLOBAL" == /private/* ]]; then
-                PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+                PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/coder/.npm-global$(vol_flag "ro")")
             else
                 log_warn "npm global prefix '$NPM_GLOBAL' not accessible in Podman VM, skipping"
             fi
         else
-            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
+            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/coder/.npm-global$(vol_flag "ro")")
         fi
     fi
 

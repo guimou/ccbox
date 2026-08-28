@@ -31,19 +31,19 @@ RUN dnf upgrade -y && \
 RUN curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
     | tar xzf - -C /usr/local/bin oc
 
-# Create non-root user 'claude' with UID 1000
+# Create non-root user 'coder' with UID 1000
 # Using UID 1000 for compatibility with --userns=keep-id
-RUN useradd -m -u 1000 -s /bin/bash claude && \
-    mkdir -p /workspace /home/claude/.config && \
-    chown -R claude:claude /workspace /home/claude/.config
+RUN useradd -m -u 1000 -s /bin/bash coder && \
+    mkdir -p /workspace /home/coder/.config && \
+    chown -R coder:coder /workspace /home/coder/.config
 
 # Firewall initialization script (domains file baked per harness below)
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh
 
-# Allow claude user to run firewall init as root without password
-RUN echo "claude ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/sudoers.d/claude && \
-    chmod 0440 /etc/sudoers.d/claude
+# Allow coder user to run firewall init as root without password
+RUN echo "coder ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/sudoers.d/coder && \
+    chmod 0440 /etc/sudoers.d/coder
 
 # Install uv (fast Python package manager, includes uvx)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
@@ -55,14 +55,14 @@ RUN pip install --break-system-packages pytest pytest-asyncio mypy httpx ruff py
 # LSP servers (required by LSP plugins), formatter, TS runner
 RUN npm install -g typescript typescript-language-server prettier tsx yarn
 
-# Switch to claude user for user-level tooling and config
-USER claude
-WORKDIR /home/claude
+# Switch to coder user for user-level tooling and config
+USER coder
+WORKDIR /home/coder
 
 # Install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     --default-toolchain stable --profile default --component rust-analyzer
-ENV PATH="/home/claude/.cargo/bin:${PATH}"
+ENV PATH="/home/coder/.cargo/bin:${PATH}"
 RUN cargo install cargo-watch
 
 # Configure git to use GH_TOKEN for HTTPS authentication when available
@@ -73,18 +73,18 @@ RUN git config --global credential.helper '!f() { test -n "$GH_TOKEN" && echo "p
 RUN printf '%s\n' \
     'set -g mouse on' \
     'set -g exit-empty on' \
-    > /home/claude/.tmux.conf
+    > /home/coder/.tmux.conf
 
 # Background monitor script for auto-closing orphaned tmux teammate panes.
-# Polls every 3 seconds, kills non-lead panes where claude has exited
+# Polls every 3 seconds, kills non-lead panes where the harness has exited
 # (pane is running just bash) and the pane is older than 10 seconds
-# (avoids race with pane startup before claude launches).
-RUN cat > /home/claude/.ccbox-tmux-monitor.sh << 'MONITOR'
+# (avoids race with pane startup before the harness launches).
+RUN cat > /home/coder/.ccbox-tmux-monitor.sh << 'MONITOR'
 #!/bin/bash
-while tmux has-session -t claude 2>/dev/null; do
+while tmux has-session -t coder 2>/dev/null; do
     sleep 3
     now=$(date +%s)
-    tmux list-panes -s -t claude -F '#{pane_id} #{pane_current_command} #{pane_created}' 2>/dev/null | \
+    tmux list-panes -s -t coder -F '#{pane_id} #{pane_current_command} #{pane_created}' 2>/dev/null | \
     while read -r pane_id cmd created; do
         [ "$pane_id" = "%0" ] && continue
         if [ "$cmd" = "bash" ]; then
@@ -94,7 +94,7 @@ while tmux has-session -t claude 2>/dev/null; do
     done
 done
 MONITOR
-RUN chmod +x /home/claude/.ccbox-tmux-monitor.sh
+RUN chmod +x /home/coder/.ccbox-tmux-monitor.sh
 
 # Container-friendly Chrome flags (rootless container, limited /dev/shm)
 ENV CHROME_PATH="/usr/lib64/chromium-browser/chromium-browser"
@@ -107,7 +107,7 @@ ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH="/usr/lib64/chromium-browser/chromium-browser
 
 # Playwright MCP config file for reliable system browser usage
 # (works around known --executable-path CLI bugs in some @playwright/mcp versions)
-RUN cat > /home/claude/.playwright-mcp-config.json << 'PWCONFIG'
+RUN cat > /home/coder/.playwright-mcp-config.json << 'PWCONFIG'
 {
   "browser": {
     "browserName": "chromium",
@@ -125,7 +125,7 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 # Add user-level install locations to PATH:
 # - ~/.local/bin (Claude Code native installer)
 # - ~/.npm-global/bin (host-mounted npm packages)
-ENV PATH="/home/claude/.npm-global/bin:/home/claude/.local/bin:${PATH}"
+ENV PATH="/home/coder/.npm-global/bin:/home/coder/.local/bin:${PATH}"
 
 # Disable auto-updaters in container (version controlled via image build).
 # Each harness only reads its own variable; setting all is harmless.
@@ -156,43 +156,43 @@ RUN mkdir -p /etc/codebox && \
 RUN set -eu; \
     case "${HARNESS}" in \
     claude) \
-        mkdir -p /home/claude/.claude/projects/-workspace \
-                 /home/claude/.claude/plugins \
-                 /home/claude/.claude/hooks \
-                 /home/claude/.claude/commands \
-                 /home/claude/.claude/skills \
-                 /home/claude/.claude/agents \
-                 /home/claude/.claude/rules \
-                 /home/claude/.claude/themes \
-                 /home/claude/.claude/statsig \
-                 /home/claude/.claude/todos \
-                 /home/claude/.claude/plans \
-                 /home/claude/.claude/tasks \
-                 /home/claude/.claude/teams \
-                 /home/claude/.claude/file-history \
-                 /home/claude/.claude/paste-cache \
-                 /home/claude/.claude/cache \
-                 /home/claude/.claude/backups \
-                 /home/claude/.claude/shell-snapshots \
-                 /home/claude/.claude/session-env \
-                 /home/claude/.claude/logs \
-                 /home/claude/.claude/debug \
-                 /home/claude/.claude/workflows \
-                 /home/claude/.claude/daemon && \
-        echo '{}' > /home/claude/.claude/.credentials.json && \
-        chown -R claude:claude /home/claude/.claude ;; \
+        mkdir -p /home/coder/.claude/projects/-workspace \
+                 /home/coder/.claude/plugins \
+                 /home/coder/.claude/hooks \
+                 /home/coder/.claude/commands \
+                 /home/coder/.claude/skills \
+                 /home/coder/.claude/agents \
+                 /home/coder/.claude/rules \
+                 /home/coder/.claude/themes \
+                 /home/coder/.claude/statsig \
+                 /home/coder/.claude/todos \
+                 /home/coder/.claude/plans \
+                 /home/coder/.claude/tasks \
+                 /home/coder/.claude/teams \
+                 /home/coder/.claude/file-history \
+                 /home/coder/.claude/paste-cache \
+                 /home/coder/.claude/cache \
+                 /home/coder/.claude/backups \
+                 /home/coder/.claude/shell-snapshots \
+                 /home/coder/.claude/session-env \
+                 /home/coder/.claude/logs \
+                 /home/coder/.claude/debug \
+                 /home/coder/.claude/workflows \
+                 /home/coder/.claude/daemon && \
+        echo '{}' > /home/coder/.claude/.credentials.json && \
+        chown -R coder:coder /home/coder/.claude ;; \
     opencode) \
         npm install -g "opencode-ai@${HARNESS_VERSION:-latest}" && \
-        mkdir -p /home/claude/.config/opencode \
-                 /home/claude/.local/share/opencode \
-                 /home/claude/.local/state/opencode \
-                 /home/claude/.cache/opencode && \
-        chown -R claude:claude /home/claude/.config /home/claude/.local /home/claude/.cache ;; \
+        mkdir -p /home/coder/.config/opencode \
+                 /home/coder/.local/share/opencode \
+                 /home/coder/.local/state/opencode \
+                 /home/coder/.cache/opencode && \
+        chown -R coder:coder /home/coder/.config /home/coder/.local /home/coder/.cache ;; \
     qwencode) \
         npm install -g "@qwen-code/qwen-code@${HARNESS_VERSION:-latest}" && \
-        mkdir -p /home/claude/.qwen/tmp \
-                 /home/claude/.qwen/file-history && \
-        chown -R claude:claude /home/claude/.qwen && \
+        mkdir -p /home/coder/.qwen/tmp \
+                 /home/coder/.qwen/file-history && \
+        chown -R coder:coder /home/coder/.qwen && \
         # System defaults: pin version (no auto-update) and never nest the
         # Qwen sandbox inside this container
         mkdir -p /etc/qwen-code && \
@@ -201,7 +201,7 @@ RUN set -eu; \
     *) echo "Unknown HARNESS: ${HARNESS}" >&2; exit 1 ;; \
     esac
 
-USER claude
+USER coder
 
 # Install Claude Code using native installer (claude harness only)
 RUN if [ "${HARNESS}" = "claude" ]; then \

@@ -46,10 +46,12 @@ The wrappers locate the engine relative to their (symlink-resolved) location, su
 ## Container Runtime
 
 - **Base**: `quay.io/fedora/fedora:44`
-- **User**: `claude` (UID 1000) for `--userns=keep-id` compatibility
+- **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **SELinux**: `:z` volume labels for shared relabeling (multi-session safe); omitted on macOS (virtiofs)
 - **Container name**: `{box}-{project}-{hash}-{session-id}` — multiple sessions can run simultaneously in the same project, sharing project data
 - **Firewall**: optional (`--with-firewall`), iptables/ipset allowlist, requires `NET_ADMIN`/`NET_RAW` (added automatically), Linux only
+
+> **Breaking change:** the container user and home folder were renamed from `claude` to `coder`. Images built before this change use `/home/claude`; rebuild or re-pull (`ccbox --build` / re-pull from the registry) so mounts line up with `/home/coder`. Host-side data is unaffected — `~/.claude/`, `~/.local/share/ocbox-projects/`, and `~/.qwen/qcbox-projects/` are unchanged; only the in-container home path moved.
 
 ## The Project Isolation Problem
 
@@ -75,7 +77,7 @@ flowchart TB
 
     subgraph Container["ccbox Container"]
         Workspace["/workspace"]
-        ClaudeHome["/home/claude/.claude/"]
+        ClaudeHome["/home/coder/.claude/"]
         ClaudeCode["Claude Code"]
     end
 
