@@ -138,6 +138,8 @@ if ! declare -F harness_log_status >/dev/null;   then harness_log_status() { :; 
 show_install_instructions() {
     local install_dir="${HOME}/.local/bin"
     local script_path="${WRAPPER_PATH}"
+    local engine_path="${SCRIPT_DIR}/lib/box-common.sh"
+    [[ -f "$engine_path" ]] || engine_path="${SCRIPT_DIR}/box-common.sh"
 
     echo "Installation Instructions"
     echo "========================="
@@ -145,8 +147,13 @@ show_install_instructions() {
     echo "1. Create the bin directory (if needed):"
     echo "   mkdir -p ${install_dir}"
     echo ""
-    echo "2. Create a symlink to ${BOX_NAME}:"
+    echo "2. Install the launcher and the shared engine. Either symlink from"
+    echo "   this clone (picks up updates and version pin files automatically):"
     echo "   ln -sf ${script_path} ${install_dir}/${BOX_NAME}"
+    echo ""
+    echo "   Or copy the two files directly (no clone needed):"
+    echo "   cp ${script_path} ${install_dir}/${BOX_NAME}"
+    echo "   cp ${engine_path} ${install_dir}/box-common.sh"
     echo ""
     echo "3. Add to your PATH (if not already):"
 
@@ -253,6 +260,13 @@ pull_image() {
 
 # Build image locally
 build_image() {
+    if [[ ! -f "${SCRIPT_DIR}/Dockerfile" ]]; then
+        log_error "No Dockerfile found in ${SCRIPT_DIR}"
+        log_error "Building locally requires a clone of the repository:"
+        log_error "  git clone https://github.com/guimou/ccbox.git"
+        exit 1
+    fi
+
     local tag
     tag=$(determine_image_tag)
     local full_tag="${LOCAL_IMAGE_NAME}:${tag}"

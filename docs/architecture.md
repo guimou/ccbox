@@ -41,7 +41,7 @@ The launchers are thin wrappers around a shared engine, `lib/box-common.sh`:
 - The engine provides everything common: argument parsing, image pull/build/tag resolution, project keying, container naming, base mounts (workspace, gcloud, gitconfig, timezone, audio), clipboard wiring, npm-global mount, GitHub token injection, firewall capabilities, and the final `podman run`.
 - Wrappers customize behavior through **hook functions** the engine calls at defined points: `harness_parse_arg` (harness-specific flags), `harness_ensure_config` (create global config on first run), `harness_setup_project` (create per-project host directories), `harness_mounts` (harness-specific volume mounts), `harness_pre_run` (wrap the launch command, e.g. tmux), and `harness_log_status`.
 
-Because the wrappers source the engine from `lib/box-common.sh` relative to their (symlink-resolved) location, installation is done by symlinking the launchers from a clone of the repo.
+The wrappers locate the engine relative to their (symlink-resolved) location, supporting two layouts: a repo clone (`lib/box-common.sh` next to the launchers, used via symlinks) or a flat install (`box-common.sh` copied next to the launchers, e.g. in `~/.local/bin`). In a flat install there are no version pin files or Dockerfile, so the image tag defaults to `latest` (overridable with the version flag) and `--build` is unavailable.
 
 ## Container Runtime
 
