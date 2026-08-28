@@ -31,9 +31,23 @@ All three provide:
 - [Podman](https://podman.io/docs/installation) installed and configured for rootless operation
 - Fedora Linux (or compatible distribution) or macOS with [Podman Desktop](https://podman-desktop.io/downloads)
 
-### Install
+### Option 1: Download the scripts (simplest)
 
-The launchers share a common engine (`lib/box-common.sh`), so symlink them from a clone (symlinks are resolved to the repo, where the engine and version files live):
+Download the shared engine (`box-common.sh`) plus the launcher(s) you want into the same folder:
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/lib/box-common.sh -o ~/.local/bin/box-common.sh
+curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/ccbox -o ~/.local/bin/ccbox
+chmod +x ~/.local/bin/ccbox
+# Repeat the last two lines for ocbox / qcbox if desired
+```
+
+With this install the image tag defaults to `latest`; use `--claude-version` (or `--opencode-version` / `--qwen-version`) to pin one.
+
+### Option 2: Clone the repository
+
+Cloning gives you the version pin files and lets you build images locally (`--build`). Symlink the launchers you use (symlinks are resolved back to the repo):
 
 ```bash
 git clone https://github.com/guimou/ccbox.git
@@ -42,7 +56,7 @@ ln -sf "$(pwd)/ccbox/ocbox" ~/.local/bin/ocbox
 ln -sf "$(pwd)/ccbox/qcbox" ~/.local/bin/qcbox
 ```
 
-Only link the launchers you actually use, and make sure `~/.local/bin` is in your PATH. Run `ccbox --install` for OS and shell-specific instructions.
+Either way, make sure `~/.local/bin` is in your PATH. Run `ccbox --install` for OS and shell-specific instructions.
 
 ## Quick Start
 

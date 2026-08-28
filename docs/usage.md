@@ -104,6 +104,8 @@ echo "<version>" > ~/path/to/ccbox/CLAUDE_VERSION
 
 This ensures everyone uses the same version. The `--claude-version` / `--opencode-version` / `--qwen-version` flags override the respective file.
 
+Version pin files only exist in clone-based installs (the launcher looks for them next to its resolved location). With a flat install (scripts copied to `~/.local/bin`), the image tag defaults to `latest` — use the version flag to pin.
+
 ## GitHub Authentication
 
 To interact with GitHub from inside the container (clone private repos, push, create PRs), authenticate on the host **before** launching:

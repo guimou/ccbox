@@ -79,7 +79,19 @@ harness_mounts() {
     fi
 }
 
-# Load the shared engine and run
-# shellcheck source=lib/box-common.sh
-source "${SCRIPT_DIR}/lib/box-common.sh"
+# Load the shared engine and run. Two supported layouts:
+#   - repo clone:     lib/box-common.sh next to the launcher
+#   - flat install:   box-common.sh next to the launcher (e.g. ~/.local/bin)
+if [[ -f "${SCRIPT_DIR}/lib/box-common.sh" ]]; then
+    # shellcheck source=lib/box-common.sh
+    source "${SCRIPT_DIR}/lib/box-common.sh"
+elif [[ -f "${SCRIPT_DIR}/box-common.sh" ]]; then
+    # shellcheck source=lib/box-common.sh
+    source "${SCRIPT_DIR}/box-common.sh"
+else
+    echo "[ERROR] Shared engine box-common.sh not found in ${SCRIPT_DIR}" >&2
+    echo "Download it next to the launcher:" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/lib/box-common.sh -o ${SCRIPT_DIR}/box-common.sh" >&2
+    exit 1
+fi
 box_main "$@"
