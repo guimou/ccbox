@@ -202,9 +202,9 @@ Set environment variables before launching to use Vertex AI:
 ```bash
 export CLAUDE_CODE_USE_VERTEX=1
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
-./ccbox
+./ccbox --with-gcloud
 ```
-Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
+Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--with-gcloud` is passed.
 
 ## CI/CD
 
@@ -221,7 +221,8 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
   - Global settings (shared): `~/.claude/{settings.json,settings.local.json,.credentials.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`
   - Project data (isolated): `~/.claude/ccbox-projects/{project}_{hash}/` → session data, history, todos, plugins
   - `~/.claude.json` → `/home/claude/.claude.json`
-  - `~/.config/gcloud` → `/home/claude/.config/gcloud` (read-only)
+  - `~/.config/gcloud` → `/home/claude/.config/gcloud` (read-only, only with `--with-gcloud`)
+  - `~/.gitconfig` → `/home/claude/.gitconfig` (read-only, only with `--with-gitconfig`)
   - npm global prefix → `/home/claude/.npm-global` (read-only, auto-detected)
   - PulseAudio socket (for audio support)
   - `/etc/localtime` (for timezone sync)
@@ -229,7 +230,7 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
 - **Project Isolation**: Each project gets its own history and session data (`~/.claude/ccbox-projects/` for ccbox, `~/.local/share/ocbox-projects/` for ocbox, `~/.qwen/qcbox-projects/` for qcbox)
 - **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`{box}-{project}-{hash}-{session-id}`)
-- **Per-harness mounts**: the mounts listed above are ccbox's. ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode` with the shared `auth.json` mounted on top, and a shared `~/.cache/opencode`. qcbox mounts shared `~/.qwen/{settings.json,oauth_creds.json,QWEN.md}` plus per-project `tmp/` and `file-history/` dirs. Workspace, gcloud, gitconfig, clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh`).
+- **Per-harness mounts**: the mounts listed above are ccbox's. ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode` with the shared `auth.json` mounted on top, and a shared `~/.cache/opencode`. qcbox mounts shared `~/.qwen/{settings.json,oauth_creds.json,QWEN.md}` plus per-project `tmp/` and `file-history/` dirs. Workspace, gcloud (opt-in `--with-gcloud`), gitconfig (opt-in `--with-gitconfig`), clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh`).
 
 ## Clipboard Support
 

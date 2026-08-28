@@ -80,6 +80,8 @@ ccbox --help              # All options
 
 API keys and provider settings are forwarded from host environment variables (e.g. `ANTHROPIC_API_KEY`, Vertex AI, Bedrock) — see the [usage guide](docs/usage.md#api-provider-configuration).
 
+> **Breaking change:** host credential files are no longer mounted by default. Pass `--with-gcloud` to mount `~/.config/gcloud` (e.g. for Vertex AI) and/or `--with-gitconfig` to mount `~/.gitconfig`. GitHub token injection (`GH_TOKEN`) is unaffected.
+
 ## Documentation
 
 | Document | Contents |

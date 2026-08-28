@@ -33,6 +33,8 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--no-clipboard` | Disable host clipboard/display access |
 | `--no-github` / `--with-github` / `--github-token <t>` | Control GitHub token injection |
 | `--npm-global <dir>` | Explicit npm global prefix to mount (auto-detected otherwise) |
+| `--with-gcloud` | Mount `~/.config/gcloud` read-only (Vertex AI, opt-in) |
+| `--with-gitconfig` | Mount `~/.gitconfig` read-only (git identity, opt-in) |
 | `--list-sessions` | List active sessions for the current project |
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
@@ -70,7 +72,7 @@ export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 ccbox
 ```
 
-Your gcloud credentials (`~/.config/gcloud`) are mounted read-only.
+Launch with `--with-gcloud` to mount your gcloud credentials (`~/.config/gcloud`) read-only.
 
 **AWS Bedrock:**
 

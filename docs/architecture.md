@@ -13,7 +13,7 @@ One repository produces three container images and three launchers from a shared
 - **Mount only the current folder** — the project directory is the only host code visible inside the container, at `/workspace`.
 - **Per-project isolation** — each project gets its own history and session data; sessions of different projects never mix.
 - **Share only what is truly shareable** — credentials, global settings, and caches are shared across projects; everything stateful is per-project.
-- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
+- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
 - **Rootless and SELinux-friendly** — Podman rootless with `--userns=keep-id`, `:z` volume labels on Linux.
 
 ## One Dockerfile, Three Images
@@ -38,7 +38,7 @@ Auto-updaters are disabled for all harnesses — versions are controlled by the 
 The launchers are thin wrappers around a shared engine, `lib/box-common.sh`:
 
 - Each wrapper defines **identity variables** (box name, harness, CLI binary, registry image, version flag/file, environment passthrough patterns).
-- The engine provides everything common: argument parsing, image pull/build/tag resolution, project keying, container naming, base mounts (workspace, gcloud, gitconfig, timezone, audio), clipboard wiring, npm-global mount, GitHub token injection, firewall capabilities, and the final `podman run`.
+- The engine provides everything common: argument parsing, image pull/build/tag resolution, project keying, container naming, base mounts (workspace, timezone, audio), opt-in host mounts (`--with-gcloud`, `--with-gitconfig`), clipboard wiring, npm-global mount, GitHub token injection, firewall capabilities, and the final `podman run`.
 - Wrappers customize behavior through **hook functions** the engine calls at defined points: `harness_parse_arg` (harness-specific flags), `harness_ensure_config` (create global config on first run), `harness_setup_project` (create per-project host directories), `harness_mounts` (harness-specific volume mounts), `harness_pre_run` (wrap the launch command, e.g. tmux), and `harness_log_status`.
 
 The wrappers locate the engine relative to their (symlink-resolved) location, supporting two layouts: a repo clone (`lib/box-common.sh` next to the launchers, used via symlinks) or a flat install (`box-common.sh` copied next to the launchers, e.g. in `~/.local/bin`). In a flat install there are no version pin files or Dockerfile, so the image tag defaults to `latest` (overridable with the version flag) and `--build` is unavailable.
@@ -59,7 +59,7 @@ The launchers solve this **host-side**: each project gets its own host directory
 
 ## Per-Harness Mounts
 
-Common to all launchers (handled by the engine): workspace, gcloud (ro), gitconfig (ro), clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env.
+Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro).
 
 ### ccbox (Claude Code)
 
@@ -69,7 +69,7 @@ flowchart TB
         CWD["Current Directory"]
         GlobalConfig["~/.claude/"]
         ProjectData["~/.claude/ccbox-projects/"]
-        GCloud["~/.config/gcloud/"]
+        GCloud["~/.config/gcloud/<br/>(--with-gcloud)"]
     end
 
     subgraph Container["ccbox Container"]

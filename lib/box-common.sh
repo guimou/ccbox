@@ -207,6 +207,8 @@ show_help() {
     echo "  --with-github            Explicitly enable GitHub token injection (auto by default)"
     echo "  --no-github              Disable GitHub token injection"
     echo "  --github-token TOKEN     Use specific GitHub token instead of auto-detecting"
+    echo "  --with-gcloud            Mount ~/.config/gcloud read-only (for Vertex AI)"
+    echo "  --with-gitconfig         Mount ~/.gitconfig read-only (git identity and config)"
     echo "  --list-sessions          List active sessions for this project"
     echo "  --install                Show installation instructions"
     harness_extra_help
@@ -300,6 +302,8 @@ box_main() {
     NO_GITHUB=false
     WITH_GITHUB=false
     GITHUB_TOKEN=""
+    WITH_GCLOUD=false
+    WITH_GITCONFIG=false
     LIST_SESSIONS=false
     SHOW_INSTALL=false
     HARNESS_VERSION=""
@@ -369,6 +373,14 @@ box_main() {
                 ;;
             --github-token=*)
                 GITHUB_TOKEN="${1#*=}"
+                shift
+                ;;
+            --with-gcloud)
+                WITH_GCLOUD=true
+                shift
+                ;;
+            --with-gitconfig)
+                WITH_GITCONFIG=true
                 shift
                 ;;
             --)
@@ -487,12 +499,22 @@ box_main() {
     harness_mounts
 
     # Add optional mounts that may not exist on all systems
-    if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
-        PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
+    if $WITH_GCLOUD; then
+        if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
+            PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
+        else
+            log_warn "$GOOGLE_CONFIG_DIR not found on host, --with-gcloud ignored"
+            WITH_GCLOUD=false
+        fi
     fi
 
-    if [[ -f "${HOME}/.gitconfig" ]]; then
-        PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig$(vol_flag "ro")")
+    if $WITH_GITCONFIG; then
+        if [[ -f "${HOME}/.gitconfig" ]]; then
+            PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig$(vol_flag "ro")")
+        else
+            log_warn "${HOME}/.gitconfig not found on host, --with-gitconfig ignored"
+            WITH_GITCONFIG=false
+        fi
     fi
 
     # Linux-specific mounts and environment variables
@@ -638,6 +660,8 @@ box_main() {
     else
         log_info "GitHub: not available (run 'gh auth login' to enable)"
     fi
+    log_info "gcloud: $(if $WITH_GCLOUD; then echo 'mounted'; else echo 'not mounted (use --with-gcloud)'; fi)"
+    log_info "gitconfig: $(if $WITH_GITCONFIG; then echo 'mounted'; else echo 'not mounted (use --with-gitconfig)'; fi)"
 
     # Debug mode: print the podman command
     if [[ -n "${DEBUG}" ]]; then
