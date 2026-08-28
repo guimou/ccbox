@@ -1,116 +1,15 @@
-# Contributing to ccbox
+# Contributing
 
-## Local Development
+Contributions are welcome — issues and pull requests alike.
 
-### Building the image
+Everything you need to work on this project lives in the documentation:
 
-```bash
-# Build locally (creates ccbox:latest)
-./ccbox --build
+- [docs/development.md](docs/development.md) — building images locally, adding OS packages and firewall domains, debug mode, linting, CI/CD and the release process
+- [docs/architecture.md](docs/architecture.md) — how the shared Dockerfile, launcher engine, and per-harness mounts fit together
 
-# Build a specific version
-./ccbox --build --claude-version <version>
+## Guidelines
 
-# Use locally-built image instead of pulling from registry
-./ccbox --local
-```
-
-### Adding OS packages
-
-Edit `os-packages.txt` (one package per line) and rebuild:
-
-```bash
-echo "package-name" >> os-packages.txt
-./ccbox --build
-```
-
-### Adding firewall domains
-
-Edit `firewall-domains.txt` and rebuild:
-
-```bash
-echo "example.com" >> firewall-domains.txt
-./ccbox --build
-```
-
-## File Structure
-
-| File | Description |
-|------|-------------|
-| `ccbox` | Host launch script |
-| `Dockerfile` | Container image definition (Fedora 43 base) |
-| `CLAUDE_VERSION` | Claude Code version for builds |
-| `os-packages.txt` | DNF packages to install |
-| `firewall-domains.txt` | Allowed domains when firewall is enabled |
-| `init-firewall.sh` | Firewall initialization script (iptables/ipset) |
-| `CLAUDE.md` | Claude Code project instructions |
-
-## CI/CD
-
-The container image is automatically built and pushed to `quay.io/guimou/ccbox` when changes are pushed to the `main` branch.
-
-### Automatic Build Triggers
-
-The workflow triggers on changes to:
-
-- `CLAUDE_VERSION` - Claude Code version file
-- `Dockerfile` - Container definition
-- `os-packages.txt` - OS package list
-- `firewall-domains.txt` - Firewall allowed domains
-- `init-firewall.sh` - Firewall script
-
-### Image Tags
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Most recent build |
-| `X.Y.Z` | Specific Claude Code version |
-| `abc1234` | Git commit SHA (short) |
-
-### Pulling Pre-built Images
-
-```bash
-# Pull the latest image
-podman pull quay.io/guimou/ccbox:latest
-
-# Pull a specific version
-podman pull quay.io/guimou/ccbox:<version>
-```
-
-### Manual Workflow Dispatch
-
-You can manually trigger a build from the GitHub Actions UI with an optional version override.
-
-### Setting Up Quay.io Credentials
-
-To enable CI/CD pushes to Quay.io, configure the following GitHub repository secrets:
-
-1. **Create a Quay.io Robot Account:**
-   - Log in to [quay.io](https://quay.io)
-   - Go to Account Settings → Robot Accounts
-   - Create a new robot account (e.g., `github_actions`)
-   - Grant **Write** permission to the `guimou/ccbox` repository
-   - Copy the robot account credentials
-
-2. **Add GitHub Secrets:**
-   - Go to your repository Settings → Secrets and variables → Actions
-   - Add the following secrets:
-
-   | Secret | Value |
-   |--------|-------|
-   | `QUAY_USERNAME` | Robot account name (e.g., `guimou+github_actions`) |
-   | `QUAY_PASSWORD` | Robot account token |
-
-### Updating Claude Code Version
-
-To release a new version:
-
-```bash
-# Update the version file
-echo "2.1.37" > CLAUDE_VERSION
-
-# Commit and push
-git add CLAUDE_VERSION
-git commit -m "chore: bump Claude Code version to 2.1.37"
-git push origin main
-```
+- Keep common image layers free of any reference to the `HARNESS` build arg so the build cache stays shared across the three images.
+- Put launcher behavior common to all harnesses in `lib/box-common.sh`; keep the `ccbox`/`ocbox`/`qcbox` wrappers limited to harness identity and hooks.
+- Run `shellcheck ccbox ocbox qcbox lib/box-common.sh init-firewall.sh` before submitting.
+- Update the relevant file under `docs/` when your change affects usage, architecture, or the development workflow.

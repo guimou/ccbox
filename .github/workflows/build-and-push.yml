@@ -3,28 +3,39 @@ name: Build and Push Container Image
 on:
   workflow_call:
     inputs:
-      claude_version:
-        description: 'Claude Code version (leave empty to use CLAUDE_VERSION file)'
+      harness:
+        description: 'Harness to build: claude, opencode, or qwencode'
+        required: true
+        type: string
+      harness_version:
+        description: 'Harness version (leave empty to use the version file)'
         required: false
         type: string
       image_tag:
-        description: 'Image tag to apply (e.g., 2.1.37 or 2.1.37-1). Defaults to claude_version.'
+        description: 'Image tag to apply (e.g., 2.1.37 or 2.1.37-1). Defaults to harness_version.'
         required: false
         type: string
   workflow_dispatch:
     inputs:
-      claude_version:
-        description: 'Claude Code version (leave empty to use CLAUDE_VERSION file)'
+      harness:
+        description: 'Harness to build'
+        required: true
+        type: choice
+        options:
+          - claude
+          - opencode
+          - qwencode
+      harness_version:
+        description: 'Harness version (leave empty to use the version file)'
         required: false
         type: string
       image_tag:
-        description: 'Image tag to apply (e.g., 2.1.37 or 2.1.37-1). Defaults to claude_version.'
+        description: 'Image tag to apply (e.g., 2.1.37 or 2.1.37-1). Defaults to harness_version.'
         required: false
         type: string
 
 env:
   REGISTRY: quay.io
-  IMAGE_NAME: guimou/ccbox
 
 jobs:
   build-and-push:
@@ -36,18 +47,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Read CLAUDE_VERSION file
-        id: version
+      - name: Resolve harness parameters
+        id: harness
         run: |
-          if [ -n "${{ inputs.claude_version }}" ]; then
-            VERSION="${{ inputs.claude_version }}"
-          elif [ -f CLAUDE_VERSION ]; then
-            VERSION=$(cat CLAUDE_VERSION | tr -d '[:space:]')
+          case "${{ inputs.harness }}" in
+            claude)
+              IMAGE_NAME="guimou/ccbox"
+              VERSION_FILE="CLAUDE_VERSION"
+              ;;
+            opencode)
+              IMAGE_NAME="guimou/ocbox"
+              VERSION_FILE="OPENCODE_VERSION"
+              ;;
+            qwencode)
+              IMAGE_NAME="guimou/qcbox"
+              VERSION_FILE="QWENCODE_VERSION"
+              ;;
+            *)
+              echo "Unknown harness: ${{ inputs.harness }}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -n "${{ inputs.harness_version }}" ]; then
+            VERSION="${{ inputs.harness_version }}"
+          elif [ -f "$VERSION_FILE" ]; then
+            VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
           else
             VERSION=""
           fi
-          echo "claude_version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Claude Code version: ${VERSION:-latest}"
+
+          echo "image_name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Harness: ${{ inputs.harness }} -> ${IMAGE_NAME} (version: ${VERSION:-latest})"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -63,9 +95,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.harness.outputs.image_name }}
           tags: |
-            type=raw,value=${{ inputs.image_tag || steps.version.outputs.claude_version }},enable=${{ inputs.image_tag != '' || steps.version.outputs.claude_version != '' }}
+            type=raw,value=${{ inputs.image_tag || steps.harness.outputs.version }},enable=${{ inputs.image_tag != '' || steps.harness.outputs.version != '' }}
             type=raw,value=latest
             type=sha,prefix=,format=short
 
@@ -77,6 +109,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            CLAUDE_VERSION=${{ steps.version.outputs.claude_version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            HARNESS=${{ inputs.harness }}
+            HARNESS_VERSION=${{ steps.harness.outputs.version }}
+          cache-from: type=gha,scope=${{ inputs.harness }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.harness }}

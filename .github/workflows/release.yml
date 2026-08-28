@@ -4,23 +4,32 @@ on:
   push:
     branches: [main]
     paths:
+      # Harness version pins
       - 'CLAUDE_VERSION'
+      - 'OPENCODE_VERSION'
+      - 'QWENCODE_VERSION'
+      # Shared image/launcher files (affect all harnesses)
       - 'Dockerfile'
       - 'os-packages.txt'
       - 'firewall-domains.txt'
       - 'init-firewall.sh'
+      - 'lib/**'
+      # Harness-specific files
+      - 'firewall-domains-claude.txt'
+      - 'firewall-domains-opencode.txt'
+      - 'firewall-domains-qwencode.txt'
       - 'ccbox'
+      - 'ocbox'
+      - 'qcbox'
 
 jobs:
-  compute-tag:
+  detect:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      image_tag: ${{ steps.tag.outputs.image_tag }}
-      version: ${{ steps.tag.outputs.version }}
-      skip: ${{ steps.tag.outputs.skip }}
+      matrix: ${{ steps.detect.outputs.matrix }}
+      any: ${{ steps.detect.outputs.any }}
 
     steps:
       - name: Checkout repository
@@ -28,55 +37,99 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine release tag
-        id: tag
+      - name: Detect harnesses to release
+        id: detect
         run: |
-          VERSION=$(cat CLAUDE_VERSION | tr -d '[:space:]')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
 
-          # Check if CLAUDE_VERSION was changed in this commit
-          if git diff HEAD~1 HEAD -- CLAUDE_VERSION | grep -q '^[+-][0-9]'; then
-            TAG="v${VERSION}"
-            IMAGE_TAG="${VERSION}"
-          else
-            # Find the highest existing suffix for this version
-            ESCAPED_VERSION=$(echo "$VERSION" | sed 's/\./\\./g')
-            LAST=$(git tag --list "v${VERSION}-*" | sed "s/v${ESCAPED_VERSION}-//" | sort -n | tail -1)
-            if [ -z "$LAST" ]; then
-              N=1
-            else
-              N=$((LAST + 1))
-            fi
-            TAG="v${VERSION}-${N}"
-            IMAGE_TAG="${VERSION}-${N}"
+          # Shared files trigger a rebuild of every harness
+          SHARED_CHANGED=false
+          if echo "$CHANGED" | grep -qE '^(Dockerfile|os-packages\.txt|firewall-domains\.txt|init-firewall\.sh|lib/)'; then
+            SHARED_CHANGED=true
           fi
 
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          MATRIX="[]"
 
-          # Check if the tag already exists
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Tag ${TAG} already exists, skipping release"
+          add_harness() {
+            local harness="$1" box="$2" version_file="$3" launcher="$4" overlay="$5"
+
+            local version
+            version=$(tr -d '[:space:]' < "$version_file")
+            if [ -z "$version" ]; then
+              echo "::warning::${version_file} is empty, skipping ${box}"
+              return
+            fi
+
+            local git_tag image_tag
+            # A version bump releases the plain version; any other relevant
+            # change releases a -N suffixed rebuild of the current version
+            if git diff HEAD~1 HEAD -- "$version_file" | grep -q '^[+-][0-9]'; then
+              git_tag="${box}-v${version}"
+              image_tag="${version}"
+            elif [ "$SHARED_CHANGED" = "true" ] || echo "$CHANGED" | grep -qE "^(${launcher}|${overlay})$"; then
+              local escaped last n
+              escaped=$(echo "$version" | sed 's/\./\\./g')
+              last=$(git tag --list "${box}-v${version}-*" | sed "s/${box}-v${escaped}-//" | sort -n | tail -1)
+              if [ -z "$last" ]; then
+                n=1
+              else
+                n=$((last + 1))
+              fi
+              git_tag="${box}-v${version}-${n}"
+              image_tag="${version}-${n}"
+            else
+              echo "No relevant changes for ${box}, skipping"
+              return
+            fi
+
+            if git rev-parse "$git_tag" >/dev/null 2>&1; then
+              echo "Tag ${git_tag} already exists, skipping ${box}"
+              return
+            fi
+
+            echo "Will release ${box}: git tag ${git_tag}, image tag ${image_tag}"
+            MATRIX=$(echo "$MATRIX" | jq -c \
+              --arg harness "$harness" --arg box "$box" \
+              --arg git_tag "$git_tag" --arg image_tag "$image_tag" \
+              '. + [{harness: $harness, box: $box, git_tag: $git_tag, image_tag: $image_tag}]')
+          }
+
+          add_harness claude   ccbox CLAUDE_VERSION   ccbox firewall-domains-claude.txt
+          add_harness opencode ocbox OPENCODE_VERSION ocbox firewall-domains-opencode.txt
+          add_harness qwencode qcbox QWENCODE_VERSION qcbox firewall-domains-qwencode.txt
+
+          echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+          if [ "$MATRIX" = "[]" ]; then
+            echo "any=false" >> $GITHUB_OUTPUT
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Will create release ${TAG} with image tag ${IMAGE_TAG}"
+            echo "any=true" >> $GITHUB_OUTPUT
           fi
 
   build:
-    needs: compute-tag
-    if: needs.compute-tag.outputs.skip != 'true'
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.matrix) }}
     uses: ./.github/workflows/build-and-push.yml
     with:
-      image_tag: ${{ needs.compute-tag.outputs.image_tag }}
+      harness: ${{ matrix.harness }}
+      image_tag: ${{ matrix.image_tag }}
     secrets: inherit
 
   release:
-    needs: [compute-tag, build]
-    if: needs.compute-tag.outputs.skip != 'true'
+    needs: [detect, build]
+    if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
@@ -88,14 +141,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ needs.compute-tag.outputs.tag }}"
-          IMAGE_TAG="${{ needs.compute-tag.outputs.image_tag }}"
+          TAG="${{ matrix.git_tag }}"
+          IMAGE_TAG="${{ matrix.image_tag }}"
+          BOX="${{ matrix.box }}"
 
-          # Find previous release tag for changelog range
-          PREV_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          # Find previous release tag of this harness for the changelog range
+          # (fall back to legacy unprefixed v* tags used before multi-harness)
+          PREV_TAG=$(git tag --list "${BOX}-v*" --sort=-version:refname | head -1)
+          if [ -z "$PREV_TAG" ] && [ "$BOX" = "ccbox" ]; then
+            PREV_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          fi
 
           # Build release notes with PR-style content
-          NOTES="Container image: \`quay.io/guimou/ccbox:${IMAGE_TAG}\`"
+          NOTES="Container image: \`quay.io/guimou/${BOX}:${IMAGE_TAG}\`"
           NOTES="${NOTES}"$'\n\n'"## Changes"$'\n'
           if [ -n "$PREV_TAG" ]; then
             NOTES="${NOTES}$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s (%h)' --reverse)"

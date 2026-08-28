@@ -1,0 +1,80 @@
+#!/bin/bash
+# OpenCode Development Container Launch Script
+# Launches a containerized OpenCode environment with the current directory mounted
+#
+# Harness-specific wrapper around lib/box-common.sh.
+#
+# OpenCode state layout (XDG-based):
+#   ~/.config/opencode/          global config, agents, commands, themes (shared)
+#   ~/.local/share/opencode/     data dir: auth.json + per-project session storage
+#   ~/.cache/opencode/           downloaded provider packages and LSP binaries
+#
+# Because every project is mounted at /workspace inside the container, the
+# data dir is isolated per project on the host (~/.local/share/ocbox-projects/)
+# so sessions from different projects never mix; only auth.json (credentials)
+# and the cache are shared across projects.
+
+set -e
+
+# Resolve the real script location (follows symlinks, e.g. ~/.local/bin/ocbox)
+WRAPPER_SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "$WRAPPER_SOURCE" ]]; do
+    WRAPPER_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+    WRAPPER_SOURCE="$(readlink "$WRAPPER_SOURCE")"
+    [[ "$WRAPPER_SOURCE" != /* ]] && WRAPPER_SOURCE="${WRAPPER_DIR}/${WRAPPER_SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+WRAPPER_PATH="${SCRIPT_DIR}/$(basename "$WRAPPER_SOURCE")"
+
+# Harness identity
+BOX_NAME="ocbox"
+HARNESS="opencode"
+HARNESS_TITLE="OpenCode"
+HARNESS_CLI="opencode"
+REGISTRY_IMAGE="guimou/ocbox"
+VERSION_FLAG="--opencode-version"
+VERSION_FILE="OPENCODE_VERSION"
+
+# Env vars forwarded from the host (OpenCode config + common provider keys)
+ENV_PASSTHROUGH_REGEX='^(OPENCODE_|ANTHROPIC_|OPENAI_|OPENROUTER_|GEMINI_|GOOGLE_|AZURE_|DEEPSEEK_|MISTRAL_|XAI_|GROQ_)'
+ENV_PASSTHROUGH_VARS=(
+    NODE_OPTIONS NO_COLOR FORCE_COLOR
+    AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
+)
+
+# Ensure global config files and directories exist
+harness_ensure_config() {
+    OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+    OPENCODE_DATA_DIR="${HOME}/.local/share/opencode"
+    OPENCODE_CACHE_DIR="${HOME}/.cache/opencode"
+
+    mkdir -p "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_CACHE_DIR"
+
+    # Credentials store, shared across all projects (written by `opencode auth login`)
+    [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]] || echo '{}' > "${OPENCODE_DATA_DIR}/auth.json"
+}
+
+# Setup project-specific data dir under ~/.local/share/ocbox-projects/
+harness_setup_project() {
+    PROJECT_DATA_DIR="${HOME}/.local/share/ocbox-projects/${PROJECT_KEY}"
+    mkdir -p "${PROJECT_DATA_DIR}/data"
+}
+
+harness_mounts() {
+    PODMAN_ARGS+=(
+        # Global config: opencode.json, agents, commands, plugins, themes (shared)
+        -v "${OPENCODE_CONFIG_DIR}:/home/claude/.config/opencode$(vol_flag "")"
+        # Data dir isolated per project (sessions, storage, logs)
+        -v "${PROJECT_DATA_DIR}/data:/home/claude/.local/share/opencode$(vol_flag "")"
+        # Credentials shared across projects, mounted over the per-project data dir
+        -v "${OPENCODE_DATA_DIR}/auth.json:/home/claude/.local/share/opencode/auth.json$(vol_flag "")"
+        # Cache shared across projects (provider packages, LSP binaries)
+        -v "${OPENCODE_CACHE_DIR}:/home/claude/.cache/opencode$(vol_flag "")"
+    )
+}
+
+# Load the shared engine and run
+# shellcheck source=lib/box-common.sh
+source "${SCRIPT_DIR}/lib/box-common.sh"
+box_main "$@"

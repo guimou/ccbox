@@ -1,0 +1,13 @@
+# Allowed domains for the firewall - Claude Code specific
+
+# Anthropic APIs
+api.anthropic.com
+sentry.io
+statsig.anthropic.com
+statsig.com
+
+# Claude.ai (OAuth login, install script, Remote Control)
+claude.ai
+
+# Documentation (docs.anthropic.com redirects here)
+code.claude.com
