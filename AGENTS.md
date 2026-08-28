@@ -39,6 +39,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox
 # Disable clipboard access (for extra security)
 ./ccbox --no-clipboard
 
+# Mount ~/.claude/.credentials.json (API key or OAuth, shared across projects)
+./ccbox --with-credentials
+
 # Enable agent teams (experimental)
 ./ccbox --with-teams
 
@@ -218,9 +221,10 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
 - **User**: `claude` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
   - Current directory → `/workspace`
-  - Global settings (shared): `~/.claude/{settings.json,settings.local.json,.credentials.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`
+  - Global settings (shared): `~/.claude/{settings.json,settings.local.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`
   - Project data (isolated): `~/.claude/ccbox-projects/{project}_{hash}/` → session data, history, todos, plugins
   - `~/.claude.json` → `/home/claude/.claude.json`
+  - `~/.claude/.credentials.json` → `/home/claude/.claude/.credentials.json` (read-write, only with `--with-credentials`)
   - `~/.config/gcloud` → `/home/claude/.config/gcloud` (read-only, only with `--with-gcloud`)
   - `~/.gitconfig` → `/home/claude/.gitconfig` (read-only, only with `--with-gitconfig`)
   - npm global prefix → `/home/claude/.npm-global` (read-only, auto-detected)
@@ -230,7 +234,7 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
 - **Project Isolation**: Each project gets its own history and session data (`~/.claude/ccbox-projects/` for ccbox, `~/.local/share/ocbox-projects/` for ocbox, `~/.qwen/qcbox-projects/` for qcbox)
 - **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`{box}-{project}-{hash}-{session-id}`)
-- **Per-harness mounts**: the mounts listed above are ccbox's. ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode` with the shared `auth.json` mounted on top, and a shared `~/.cache/opencode`. qcbox mounts shared `~/.qwen/{settings.json,oauth_creds.json,QWEN.md}` plus per-project `tmp/` and `file-history/` dirs. Workspace, gcloud (opt-in `--with-gcloud`), gitconfig (opt-in `--with-gitconfig`), clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh`).
+- **Per-harness mounts**: the mounts listed above are ccbox's (`.credentials.json` is opt-in via `--with-credentials`). ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode` with the shared `auth.json` mounted on top, and a shared `~/.cache/opencode`. qcbox mounts shared `~/.qwen/{settings.json,oauth_creds.json,QWEN.md}` plus per-project `tmp/` and `file-history/` dirs. Workspace, gcloud (opt-in `--with-gcloud`), gitconfig (opt-in `--with-gitconfig`), clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh`).
 
 ## Clipboard Support
 

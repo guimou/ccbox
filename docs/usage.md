@@ -39,7 +39,7 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
-ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode` (see below).
+ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`, `--with-credentials` (see below).
 
 ## Sessions and Isolation
 
@@ -131,6 +131,19 @@ ccbox --github-token "ghp_xxx"     # Use specific token instead of auto-detectin
 - The token is a revocable OAuth token, not your SSH key — revoke anytime in GitHub Settings → Developer settings → Personal access tokens
 - Use fine-grained PATs for minimal scope
 - For extra security, combine with `--with-firewall`
+
+## Credentials (ccbox)
+
+By default, `~/.claude/.credentials.json` is **not** mounted into the container, so no Anthropic OAuth session or credential file is shared from the host. Authenticate one of these ways:
+
+1. **Environment variable** (recommended, default): `ANTHROPIC_API_KEY` (or Vertex/Bedrock vars) is forwarded from the host automatically — nothing extra needed.
+2. **Mount the credential file** (API key or OAuth session, shared across projects):
+
+```bash
+ccbox --with-credentials
+```
+
+`--with-credentials` mounts `~/.claude/.credentials.json` read-write, creating the file if it does not exist yet. Without the flag, the container gets a fresh, empty credential file — so `claude /login` (OAuth) inside the container does not persist to the host.
 
 ## Firewall
 

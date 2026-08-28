@@ -3,7 +3,8 @@
 # Launches a containerized Claude Code environment with the current directory mounted
 #
 # Harness-specific wrapper around lib/box-common.sh: defines the Claude Code
-# image, mounts, env passthrough, and Claude-only flags (teams, tmux, safe mode).
+# image, mounts, env passthrough, and Claude-only flags (teams, tmux, safe
+# mode, opt-in credentials mount).
 
 set -e
 
@@ -46,6 +47,7 @@ ENV_PASSTHROUGH_VARS=(
 WITH_TEAMS=false
 WITH_TMUX=false
 SAFE_MODE=false
+WITH_CREDENTIALS=false
 
 harness_parse_arg() {
     case $1 in
@@ -61,6 +63,10 @@ harness_parse_arg() {
             SAFE_MODE=true
             ARG_SHIFT=1
             ;;
+        --with-credentials)
+            WITH_CREDENTIALS=true
+            ARG_SHIFT=1
+            ;;
         *)
             return 1
             ;;
@@ -71,6 +77,7 @@ harness_extra_help() {
     echo "  --with-teams             Enable agent teams (experimental)"
     echo "  --with-tmux              Run claude inside tmux (for split-pane agent teams)"
     echo "  --safe-mode              Start with all customizations disabled"
+    echo "  --with-credentials       Mount ~/.claude/.credentials.json read-write (API key or OAuth)"
 }
 
 # Ensure global config files and directories exist
@@ -83,10 +90,12 @@ harness_ensure_config() {
         mkdir -p "$config_dir"
     fi
 
-    # Settings and credentials
+    # Settings (credentials are opt-in via --with-credentials and not created here)
     [[ -f "${config_dir}/settings.json" ]] || echo '{}' > "${config_dir}/settings.json"
     [[ -f "${config_dir}/settings.local.json" ]] || echo '{}' > "${config_dir}/settings.local.json"
-    [[ -f "${config_dir}/.credentials.json" ]] || echo '{}' > "${config_dir}/.credentials.json"
+    if $WITH_CREDENTIALS; then
+        [[ -f "${config_dir}/.credentials.json" ]] || echo '{}' > "${config_dir}/.credentials.json"
+    fi
     [[ -f "${config_dir}/keybindings.json" ]] || echo '{"bindings":[]}' > "${config_dir}/keybindings.json"
     # Global memory file (empty is fine)
     [[ -f "${config_dir}/CLAUDE.md" ]] || touch "${config_dir}/CLAUDE.md"
@@ -130,7 +139,6 @@ harness_mounts() {
         # Global settings (shared across all projects)
         -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json$(vol_flag "")"
         -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
         -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
         -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
         -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
@@ -182,6 +190,16 @@ harness_mounts() {
     if [[ -d /etc/claude-code ]]; then
         PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
     fi
+
+    # Anthropic credentials (opt-in via --with-credentials, read-write)
+    if $WITH_CREDENTIALS; then
+        if [[ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]]; then
+            PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")")
+        else
+            log_warn "${CLAUDE_CONFIG_DIR}/.credentials.json not found on host, --with-credentials ignored"
+            WITH_CREDENTIALS=false
+        fi
+    fi
 }
 
 harness_pre_run() {
@@ -213,6 +231,7 @@ harness_log_status() {
     log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
+    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
 }
 
 # Load the shared engine and run. Two supported layouts:

@@ -179,6 +179,7 @@ RUN set -eu; \
                  /home/claude/.claude/debug \
                  /home/claude/.claude/workflows \
                  /home/claude/.claude/daemon && \
+        echo '{}' > /home/claude/.claude/.credentials.json && \
         chown -R claude:claude /home/claude/.claude ;; \
     opencode) \
         npm install -g "opencode-ai@${HARNESS_VERSION:-latest}" && \

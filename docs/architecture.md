@@ -13,7 +13,7 @@ One repository produces three container images and three launchers from a shared
 - **Mount only the current folder** — the project directory is the only host code visible inside the container, at `/workspace`.
 - **Per-project isolation** — each project gets its own history and session data; sessions of different projects never mix.
 - **Share only what is truly shareable** — credentials, global settings, and caches are shared across projects; everything stateful is per-project.
-- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
+- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), Claude credentials (read-write, opt-in via `ccbox --with-credentials`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
 - **Rootless and SELinux-friendly** — Podman rootless with `--userns=keep-id`, `:z` volume labels on Linux.
 
 ## One Dockerfile, Three Images
@@ -59,7 +59,7 @@ The launchers solve this **host-side**: each project gets its own host directory
 
 ## Per-Harness Mounts
 
-Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro).
+Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `ccbox --with-credentials` (`.credentials.json`, rw).
 
 ### ccbox (Claude Code)
 
@@ -70,6 +70,7 @@ flowchart TB
         GlobalConfig["~/.claude/"]
         ProjectData["~/.claude/ccbox-projects/"]
         GCloud["~/.config/gcloud/<br/>(--with-gcloud)"]
+        Creds["~/.claude/.credentials.json<br/>(--with-credentials)"]
     end
 
     subgraph Container["ccbox Container"]
@@ -81,7 +82,6 @@ flowchart TB
     subgraph GlobalMounts["Global Mounts (shared)"]
         direction LR
         Settings["settings.json<br/>settings.local.json<br/>keybindings.json"]
-        Auth[".credentials.json"]
         Extensions["hooks/ commands/<br/>skills/ agents/"]
         Memory["CLAUDE.md<br/>rules/"]
         Cache["statsig/"]
@@ -92,6 +92,7 @@ flowchart TB
     GlobalMounts --> ClaudeHome
     ProjectData -->|"history, todos,<br/>plans, tasks,<br/>plugins (per-project)"| ClaudeHome
     GCloud -->|"mount (ro)"| Container
+    Creds -->|"mount (rw, opt-in)"| ClaudeHome
 
     ClaudeCode --> Workspace
 ```
@@ -103,7 +104,7 @@ flowchart TB
 | `~/.claude/settings.local.json` | Local settings (not synced) | Shared |
 | `~/.claude/keybindings.json` | Keyboard shortcuts | Shared |
 | **Authentication** | | |
-| `~/.claude/.credentials.json` | API credentials | Shared |
+| `~/.claude/.credentials.json` | API credentials (opt-in, `--with-credentials`) | Shared (rw, not mounted by default) |
 | `~/.claude.json` | Claude config | Shared |
 | **Extensions** | | |
 | `~/.claude/hooks/` | Custom hooks | Shared |
