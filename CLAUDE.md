@@ -4,11 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Containerized Claude Code development environment for Fedora. Runs in Podman rootless mode with SELinux support and optional network firewall restrictions.
+Containerized AI coding harness development environments for Fedora. Runs in Podman rootless mode with SELinux support and optional network firewall restrictions.
+
+One repo produces three images/launchers from a shared Dockerfile and launcher engine:
+
+| Launcher | Harness | Image | Version pin file | Firewall overlay |
+|----------|---------|-------|------------------|------------------|
+| `ccbox` | Claude Code | `quay.io/guimou/ccbox` | `CLAUDE_VERSION` | `firewall-domains-claude.txt` |
+| `ocbox` | OpenCode | `quay.io/guimou/ocbox` | `OPENCODE_VERSION` | `firewall-domains-opencode.txt` |
+| `qcbox` | Qwen Code | `quay.io/guimou/qcbox` | `QWENCODE_VERSION` | `firewall-domains-qwencode.txt` |
+
+The Dockerfile selects the harness via the `HARNESS` build arg (`claude` / `opencode` / `qwencode`) and its version via `HARNESS_VERSION`. Common layers never reference `HARNESS` so the build cache is shared across the three images.
 
 ## Run
 
-By default, the container image is pulled from `quay.io/guimou/ccbox`.
+By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox`/`qcbox`).
 
 ```bash
 # Launch with latest image from registry
@@ -40,7 +50,15 @@ By default, the container image is pulled from `quay.io/guimou/ccbox`.
 
 # List active sessions for current project
 ./ccbox --list-sessions
+
+# OpenCode and Qwen Code work the same way (same common flags)
+./ocbox
+./ocbox --opencode-version <version>
+./qcbox
+./qcbox --qwen-version <version>
 ```
+
+`--with-teams`, `--with-tmux`, and `--safe-mode` are Claude Code specific (ccbox only).
 
 Multiple sessions can run simultaneously in the same project. Each session gets a unique container name with a session ID suffix, while sharing project data (history, todos, plans, tasks).
 
@@ -58,12 +76,15 @@ For local development, you can build the image locally:
 
 ## File Structure
 
-- `Dockerfile` - Container image definition (Fedora 44 base)
+- `Dockerfile` - Container image definition (Fedora 44 base), parameterized by `HARNESS`/`HARNESS_VERSION` build args
 - `os-packages.txt` - DNF packages to install (one per line)
-- `firewall-domains.txt` - Allowed network domains (one per line)
+- `firewall-domains.txt` - Allowed network domains common to all harnesses (one per line)
+- `firewall-domains-{claude,opencode,qwencode}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
-- `ccbox` - Host launch script
-- `CLAUDE_VERSION` - Optional file to pin Claude Code version (overridden by `--claude-version`)
+- `lib/box-common.sh` - Shared launcher engine (sourced by all three launchers)
+- `ccbox` / `ocbox` / `qcbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
+- `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version`)
+- `docs/` - User-facing documentation: `usage.md`, `architecture.md`, `development.md` (README holds only the minimum and links here — keep them in sync when changing behavior)
 
 ## What's Included
 
@@ -144,7 +165,7 @@ echo "package-name" >> os-packages.txt
 ```
 
 ### Adding Allowed Domains
-Edit `firewall-domains.txt` and rebuild:
+Edit `firewall-domains.txt` (all harnesses) or the harness-specific overlay (e.g. `firewall-domains-opencode.txt`) and rebuild:
 ```bash
 echo "example.com" >> firewall-domains.txt
 ./ccbox --build
@@ -185,9 +206,14 @@ export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 ```
 Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
 
+## CI/CD
+
+- `.github/workflows/release.yml` runs on pushes to main touching image/launcher files. It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (Dockerfile, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness.
+- `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). Images are tagged `{version}`, `latest`, and the commit SHA.
+
 ## Architecture
 
-- **Registry**: `quay.io/guimou/ccbox` (CI/CD published)
+- **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox` (CI/CD published)
 - **Base**: `quay.io/fedora/fedora:44`
 - **User**: `claude` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
@@ -201,8 +227,9 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud`.
   - `/etc/localtime` (for timezone sync)
 - **SELinux**: Uses `:z` volume labels for shared relabeling (supports multi-session)
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
-- **Project Isolation**: Each project gets its own history and session data in `~/.claude/ccbox-projects/`
-- **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`ccbox-{project}-{hash}-{session-id}`)
+- **Project Isolation**: Each project gets its own history and session data (`~/.claude/ccbox-projects/` for ccbox, `~/.local/share/ocbox-projects/` for ocbox, `~/.qwen/qcbox-projects/` for qcbox)
+- **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`{box}-{project}-{hash}-{session-id}`)
+- **Per-harness mounts**: the mounts listed above are ccbox's. ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode` with the shared `auth.json` mounted on top, and a shared `~/.cache/opencode`. qcbox mounts shared `~/.qwen/{settings.json,oauth_creds.json,QWEN.md}` plus per-project `tmp/` and `file-history/` dirs. Workspace, gcloud, gitconfig, clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh`).
 
 ## Clipboard Support
 

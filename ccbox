@@ -1,113 +1,88 @@
 #!/bin/bash
 # Claude Code Development Container Launch Script
 # Launches a containerized Claude Code environment with the current directory mounted
+#
+# Harness-specific wrapper around lib/box-common.sh: defines the Claude Code
+# image, mounts, env passthrough, and Claude-only flags (teams, tmux, safe mode).
 
 set -e
 
-# Detect OS
-detect_os() {
-    case "$(uname -s)" in
-        Linux*)     echo "linux";;
-        Darwin*)    echo "macos";;
-        *)          echo "unknown";;
+# Resolve the real script location (follows symlinks, e.g. ~/.local/bin/ccbox)
+WRAPPER_SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "$WRAPPER_SOURCE" ]]; do
+    WRAPPER_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+    WRAPPER_SOURCE="$(readlink "$WRAPPER_SOURCE")"
+    [[ "$WRAPPER_SOURCE" != /* ]] && WRAPPER_SOURCE="${WRAPPER_DIR}/${WRAPPER_SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+WRAPPER_PATH="${SCRIPT_DIR}/$(basename "$WRAPPER_SOURCE")"
+
+# Harness identity
+BOX_NAME="ccbox"
+HARNESS="claude"
+HARNESS_TITLE="Claude Code"
+HARNESS_CLI="claude"
+REGISTRY_IMAGE="guimou/ccbox"
+VERSION_FLAG="--claude-version"
+VERSION_FILE="CLAUDE_VERSION"
+
+# Env vars forwarded from the host
+ENV_PASSTHROUGH_REGEX='^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_AX_|CLAUDE_ENABLE_|CLAUDE_AUTOCOMPACT_)'
+ENV_PASSTHROUGH_VARS=(
+    DISABLE_AUTOUPDATER DISABLE_AUTO_COMPACT MAX_THINKING_TOKENS
+    MCP_TIMEOUT MCP_TOOL_TIMEOUT MAX_MCP_OUTPUT_TOKENS
+    API_TIMEOUT_MS API_FORCE_IDLE_TIMEOUT BASH_DEFAULT_TIMEOUT_MS
+    BASH_MAX_TIMEOUT_MS BASH_MAX_OUTPUT_LENGTH
+    ENABLE_TOOL_SEARCH NODE_OPTIONS
+    NO_COLOR FORCE_COLOR
+    AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
+    OTEL_METRICS_EXPORTER OTEL_LOG_ASSISTANT_RESPONSES
+    OTEL_LOG_USER_PROMPTS OTEL_LOG_TOOL_DETAILS
+    OTEL_RESOURCE_ATTRIBUTES
+)
+
+# Claude-only flags
+WITH_TEAMS=false
+WITH_TMUX=false
+SAFE_MODE=false
+
+harness_parse_arg() {
+    case $1 in
+        --with-teams)
+            WITH_TEAMS=true
+            ARG_SHIFT=1
+            ;;
+        --with-tmux)
+            WITH_TMUX=true
+            ARG_SHIFT=1
+            ;;
+        --safe-mode)
+            SAFE_MODE=true
+            ARG_SHIFT=1
+            ;;
+        *)
+            return 1
+            ;;
     esac
 }
 
-OS_TYPE=$(detect_os)
-
-# Volume flag helper - adds :z for SELinux relabeling on Linux
-# On macOS, Podman VM uses virtiofs which doesn't support SELinux labels
-vol_flag() {
-    local opts="$1"
-    [[ "$OS_TYPE" == "linux" ]] && local label="z" || local label=""
-
-    if [[ -n "$opts" && -n "$label" ]]; then
-        echo ":${opts},${label}"
-    elif [[ -n "$label" ]]; then
-        echo ":${label}"
-    elif [[ -n "$opts" ]]; then
-        echo ":${opts}"
-    fi
-}
-
-# Configuration
-REGISTRY="quay.io"
-REGISTRY_IMAGE="guimou/ccbox"
-FULL_REGISTRY_IMAGE="${REGISTRY}/${REGISTRY_IMAGE}"
-LOCAL_IMAGE_NAME="ccbox"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Generate a unique session identifier
-generate_session_id() {
-    if [[ -f /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid | cut -c1-8
-    else
-        # macOS fallback
-        uuidgen | tr '[:upper:]' '[:lower:]' | cut -c1-8
-    fi
-}
-
-# Generate a unique container name based on workspace directory
-# If session_id is provided, appends it for multi-session support
-generate_container_name() {
-    local workspace_dir="$1"
-    local session_id="$2"
-    local project_name
-    project_name=$(basename "$workspace_dir")
-    # Sanitize: lowercase, replace invalid chars with dashes
-    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-    # Add short hash of full path for uniqueness (handles same-named dirs)
-    local path_hash
-    if command -v md5sum &> /dev/null; then
-        path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
-    else
-        # macOS fallback
-        path_hash=$(echo -n "$workspace_dir" | md5 | cut -c1-8)
-    fi
-
-    if [[ -n "$session_id" ]]; then
-        echo "ccbox-${project_name}-${path_hash}-${session_id}"
-    else
-        echo "ccbox-${project_name}-${path_hash}"
-    fi
-}
-
-# Setup project-specific directories under ~/.claude/ccbox-projects/
-# Returns the path to the project-specific directory
-setup_project_dirs() {
-    local workspace_dir="$1"
-    local config_dir="$2"
-    local project_name
-    project_name=$(basename "$workspace_dir")
-    # Sanitize project name: lowercase, replace invalid chars
-    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-    local path_hash
-    if command -v md5sum &> /dev/null; then
-        path_hash=$(echo -n "$workspace_dir" | md5sum | cut -c1-8)
-    else
-        # macOS fallback
-        path_hash=$(echo -n "$workspace_dir" | md5 | cut -c1-8)
-    fi
-    local project_dir="${config_dir}/ccbox-projects/${project_name}_${path_hash}"
-
-    mkdir -p "${project_dir}/projects"
-    mkdir -p "${project_dir}/todos"
-    mkdir -p "${project_dir}/plans"
-    mkdir -p "${project_dir}/tasks"
-    mkdir -p "${project_dir}/teams"
-    mkdir -p "${project_dir}/plugins"
-    mkdir -p "${project_dir}/shell-snapshots"
-    mkdir -p "${project_dir}/session-env"
-    mkdir -p "${project_dir}/logs"
-    mkdir -p "${project_dir}/debug"
-    touch "${project_dir}/history.jsonl"
-
-    echo "$project_dir"
+harness_extra_help() {
+    echo "  --with-teams             Enable agent teams (experimental)"
+    echo "  --with-tmux              Run claude inside tmux (for split-pane agent teams)"
+    echo "  --safe-mode              Start with all customizations disabled"
 }
 
 # Ensure global config files and directories exist
-ensure_global_config() {
-    local config_dir="$1"
+harness_ensure_config() {
+    CLAUDE_CONFIG_DIR="${HOME}/.claude"
+    local config_dir="$CLAUDE_CONFIG_DIR"
+
+    if [[ ! -d "$config_dir" ]]; then
+        log_info "Creating Claude config directory: $config_dir"
+        mkdir -p "$config_dir"
+    fi
+
     # Settings and credentials
     [[ -f "${config_dir}/settings.json" ]] || echo '{}' > "${config_dir}/settings.json"
     [[ -f "${config_dir}/settings.local.json" ]] || echo '{}' > "${config_dir}/settings.local.json"
@@ -116,643 +91,131 @@ ensure_global_config() {
     # Global memory file (empty is fine)
     [[ -f "${config_dir}/CLAUDE.md" ]] || touch "${config_dir}/CLAUDE.md"
     # Directories
-    [[ -d "${config_dir}/statsig" ]] || mkdir -p "${config_dir}/statsig"
-    [[ -d "${config_dir}/hooks" ]] || mkdir -p "${config_dir}/hooks"
-    [[ -d "${config_dir}/commands" ]] || mkdir -p "${config_dir}/commands"
-    [[ -d "${config_dir}/skills" ]] || mkdir -p "${config_dir}/skills"
-    [[ -d "${config_dir}/agents" ]] || mkdir -p "${config_dir}/agents"
-    [[ -d "${config_dir}/rules" ]] || mkdir -p "${config_dir}/rules"
-    [[ -d "${config_dir}/themes" ]] || mkdir -p "${config_dir}/themes"
-    # Additional global directories for core features
-    [[ -d "${config_dir}/file-history" ]] || mkdir -p "${config_dir}/file-history"
-    [[ -d "${config_dir}/paste-cache" ]] || mkdir -p "${config_dir}/paste-cache"
-    [[ -d "${config_dir}/cache" ]] || mkdir -p "${config_dir}/cache"
-    [[ -d "${config_dir}/backups" ]] || mkdir -p "${config_dir}/backups"
-    [[ -d "${config_dir}/workflows" ]] || mkdir -p "${config_dir}/workflows"
+    for dir in statsig hooks commands skills agents rules themes \
+               file-history paste-cache cache backups workflows; do
+        [[ -d "${config_dir}/${dir}" ]] || mkdir -p "${config_dir}/${dir}"
+    done
     [[ -f "${config_dir}/stats-cache.json" ]] || echo '{}' > "${config_dir}/stats-cache.json"
 }
 
-# Show first-run message for new project directories
-migrate_if_needed() {
-    local project_dir="$1"
-    local config_dir="$2"
+# Setup project-specific directories under ~/.claude/ccbox-projects/
+harness_setup_project() {
+    PROJECT_DATA_DIR="${CLAUDE_CONFIG_DIR}/ccbox-projects/${PROJECT_KEY}"
 
-    # Only show message if project dir is new AND old structure exists
-    if [[ ! -f "${project_dir}/.migrated" && -f "${config_dir}/history.jsonl" ]]; then
+    mkdir -p "${PROJECT_DATA_DIR}/projects" \
+             "${PROJECT_DATA_DIR}/todos" \
+             "${PROJECT_DATA_DIR}/plans" \
+             "${PROJECT_DATA_DIR}/tasks" \
+             "${PROJECT_DATA_DIR}/teams" \
+             "${PROJECT_DATA_DIR}/plugins" \
+             "${PROJECT_DATA_DIR}/shell-snapshots" \
+             "${PROJECT_DATA_DIR}/session-env" \
+             "${PROJECT_DATA_DIR}/logs" \
+             "${PROJECT_DATA_DIR}/debug"
+    touch "${PROJECT_DATA_DIR}/history.jsonl"
+
+    # Show first-run message for new project directories
+    if [[ ! -f "${PROJECT_DATA_DIR}/.migrated" && -f "${CLAUDE_CONFIG_DIR}/history.jsonl" ]]; then
         log_info "First run with project isolation for this workspace."
-        if [[ -f "${config_dir}/.credentials.json" ]]; then
+        if [[ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]]; then
             log_info "Credentials will be shared across all projects."
         fi
-        touch "${project_dir}/.migrated"
-        log_info "Project-specific data stored in: ${project_dir}"
+        touch "${PROJECT_DATA_DIR}/.migrated"
+        log_info "Project-specific data stored in: ${PROJECT_DATA_DIR}"
     fi
 }
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+harness_mounts() {
+    PODMAN_ARGS+=(
+        # Global settings (shared across all projects)
+        -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/themes:/home/claude/.claude/themes$(vol_flag "")"
+        # Additional global directories for core features
+        -v "${CLAUDE_CONFIG_DIR}/file-history:/home/claude/.claude/file-history$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/claude/.claude/paste-cache$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/cache:/home/claude/.claude/cache$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/backups:/home/claude/.claude/backups$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/claude/.claude/stats-cache.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/workflows:/home/claude/.claude/workflows$(vol_flag "")"
+        # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
+        # stores a PID, which is meaningless across PID namespaces (host vs container,
+        # or container vs container). Each container uses its own ephemeral copy
+        # pre-created in the image, so daemons never clobber each other.
+        # Project-specific data (isolated per project)
+        -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/projects:/home/claude/.claude/projects$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/teams:/home/claude/.claude/teams$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
+        # Additional project-scoped directories for shell/session features
+        -v "${PROJECT_DATA_DIR}/shell-snapshots:/home/claude/.claude/shell-snapshots$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/session-env:/home/claude/.claude/session-env$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/logs:/home/claude/.claude/logs$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/debug:/home/claude/.claude/debug$(vol_flag "")"
+        # Other config files
+        -v "${HOME}/.claude.json:/home/claude/.claude.json$(vol_flag "")"
+    )
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+    # Add status line script if it exists
+    if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
+        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh$(vol_flag "ro")")
+    fi
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+    # Add user's global RULES.md file if it exists (read-only)
+    if [[ -f "${CLAUDE_CONFIG_DIR}/RULES.md" ]]; then
+        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/claude/.claude/RULES.md$(vol_flag "ro")")
+    fi
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Show installation instructions for the current OS and shell
-show_install_instructions() {
-    local install_dir="${HOME}/.local/bin"
-    local script_path
-    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
-
-    echo "Installation Instructions"
-    echo "========================="
-    echo ""
-    echo "1. Create the bin directory (if needed):"
-    echo "   mkdir -p ${install_dir}"
-    echo ""
-    echo "2. Create a symlink to ccbox:"
-    echo "   ln -sf ${script_path} ${install_dir}/ccbox"
-    echo ""
-    echo "3. Add to your PATH (if not already):"
-
-    local shell_name
-    shell_name=$(basename "$SHELL")
-    case "$shell_name" in
-        zsh)
-            echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.zshrc"
-            echo "   source ~/.zshrc"
-            ;;
-        bash)
-            if [[ "$OS_TYPE" == "macos" ]]; then
-                echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.bash_profile"
-                echo "   source ~/.bash_profile"
-            else
-                echo "   echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.bashrc"
-                echo "   source ~/.bashrc"
-            fi
-            ;;
-        *)
-            echo "   Add ${install_dir} to your shell's PATH"
-            ;;
-    esac
-
-    echo ""
-    echo "4. Verify installation:"
-    echo "   ccbox --help"
-
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        echo ""
-        echo "macOS Notes:"
-        echo "  - Install Podman Desktop: https://podman-desktop.io/downloads"
-        echo "  - Or via Homebrew: brew install podman"
-        echo "  - Start the Podman machine: podman machine start"
-        echo "  - For Apple Silicon, build a local ARM64 image: ccbox --build"
+    # Enterprise managed settings (read-only)
+    if [[ -d /etc/claude-code ]]; then
+        PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
     fi
 }
 
-# Parse arguments
-BUILD_ONLY=false
-USE_LOCAL=false
-NO_FIREWALL=true
-NO_CLIPBOARD=false
-NO_GITHUB=false
-WITH_GITHUB=false
-GITHUB_TOKEN=""
-WITH_TEAMS=false
-WITH_TMUX=false
-LIST_SESSIONS=false
-SHOW_INSTALL=false
-CLAUDE_VERSION=""
-NPM_GLOBAL=""
-SAFE_MODE=false
-EXTRA_ARGS=()
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --build)
-            BUILD_ONLY=true
-            shift
-            ;;
-        --local)
-            USE_LOCAL=true
-            shift
-            ;;
-        --claude-version)
-            CLAUDE_VERSION="$2"
-            shift 2
-            ;;
-        --claude-version=*)
-            CLAUDE_VERSION="${1#*=}"
-            shift
-            ;;
-        --with-firewall)
-            NO_FIREWALL=false
-            shift
-            ;;
-        --with-teams)
-            WITH_TEAMS=true
-            shift
-            ;;
-        --with-tmux)
-            WITH_TMUX=true
-            shift
-            ;;
-        --safe-mode)
-            SAFE_MODE=true
-            shift
-            ;;
-        --list-sessions)
-            LIST_SESSIONS=true
-            shift
-            ;;
-        --no-clipboard)
-            NO_CLIPBOARD=true
-            shift
-            ;;
-        --install)
-            SHOW_INSTALL=true
-            shift
-            ;;
-        --npm-global)
-            NPM_GLOBAL="$2"
-            shift 2
-            ;;
-        --npm-global=*)
-            NPM_GLOBAL="${1#*=}"
-            shift
-            ;;
-        --with-github)
-            WITH_GITHUB=true
-            shift
-            ;;
-        --no-github)
-            NO_GITHUB=true
-            shift
-            ;;
-        --github-token)
-            GITHUB_TOKEN="$2"
-            shift 2
-            ;;
-        --github-token=*)
-            GITHUB_TOKEN="${1#*=}"
-            shift
-            ;;
-        --)
-            shift
-            EXTRA_ARGS=("$@")
-            break
-            ;;
-        -h|--help)
-            echo "Usage: $(basename "$0") [OPTIONS] [-- CLAUDE_ARGS...]"
-            echo ""
-            echo "Run Claude Code in a container. By default, pulls from ${FULL_REGISTRY_IMAGE}."
-            echo ""
-            echo "Options:"
-            echo "  --build                  Build image locally (for development)"
-            echo "  --local                  Use locally-built image instead of pulling"
-            echo "  --claude-version VERSION Use specific Claude Code version"
-            echo "  --with-firewall          Enable network firewall restrictions"
-            echo "  --with-teams             Enable agent teams (experimental)"
-            echo "  --with-tmux              Run claude inside tmux (for split-pane agent teams)"
-            echo "  --safe-mode              Start with all customizations disabled"
-            echo "  --no-clipboard           Disable clipboard access (for extra security)"
-            echo "  --npm-global PATH        Mount npm global prefix (auto-detected if not set)"
-            echo "  --with-github            Explicitly enable GitHub token injection (auto by default)"
-            echo "  --no-github              Disable GitHub token injection"
-            echo "  --github-token TOKEN     Use specific GitHub token instead of auto-detecting"
-            echo "  --list-sessions          List active sessions for this project"
-            echo "  --install                Show installation instructions"
-            echo "  -h, --help               Show this help message"
-            echo ""
-            echo "Examples:"
-            echo "  $(basename "$0")                              # Pull latest and run"
-            echo "  $(basename "$0") --claude-version 2.1.37      # Pull specific version"
-            echo "  $(basename "$0") --local                      # Use local image"
-            echo "  $(basename "$0") --build                      # Build locally"
-            echo "  $(basename "$0") --with-firewall              # Run with network restrictions"
-            echo "  $(basename "$0") --no-github                  # Run without GitHub token"
-            echo "  $(basename "$0") --with-teams --with-tmux     # Agent teams with split panes"
-            echo "  $(basename "$0") -- --version                 # Pass args to claude"
-            exit 0
-            ;;
-        *)
-            EXTRA_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-
-# Handle --install early (doesn't need podman)
-if $SHOW_INSTALL; then
-    show_install_instructions
-    exit 0
-fi
-
-# Check if podman is available
-if ! command -v podman &> /dev/null; then
-    log_error "podman is not installed or not in PATH"
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        log_error "Install Podman Desktop from: https://podman-desktop.io/downloads"
-        log_error "Or install via Homebrew: brew install podman"
+harness_pre_run() {
+    # Agent teams (experimental feature)
+    if $WITH_TEAMS; then
+        PODMAN_ARGS+=(-e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)
     fi
-    exit 1
-fi
 
-# On macOS, check if podman machine is running
-if [[ "$OS_TYPE" == "macos" ]]; then
-    if ! podman machine list 2>/dev/null | grep -q "Currently running"; then
-        log_warn "Podman machine might not be running"
-        log_info "Start it with: podman machine start"
+    # Safe mode: disable all customizations (CLAUDE.md, plugins, skills, hooks, MCP servers)
+    if $SAFE_MODE; then
+        EXTRA_ARGS+=(--safe-mode)
     fi
-fi
 
-# Handle --list-sessions early (doesn't need image)
-if $LIST_SESSIONS; then
-    WORKSPACE_DIR="$(pwd -P)"
-    BASE_NAME=$(generate_container_name "$WORKSPACE_DIR")
-    log_info "Active sessions for: $(basename "$WORKSPACE_DIR")"
-    podman ps --filter "name=^${BASE_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"
-    exit 0
-fi
-
-# Read version from CLAUDE_VERSION file if not specified via command line
-read_version_file() {
-    local version_file="${SCRIPT_DIR}/CLAUDE_VERSION"
-    if [[ -f "$version_file" ]]; then
-        local version
-        version=$(tr -d '[:space:]' < "$version_file")
-        if [[ -n "$version" && "$version" != "latest" ]]; then
-            echo "$version"
-        fi
+    # Wrap claude in tmux if --with-tmux is set.
+    # Claude must be the direct process in the tmux pane (not wrapped in bash)
+    # so that Ctrl+C (SIGINT) reaches it properly.
+    LAUNCH_CMD="claude ${EXTRA_ARGS[*]}"
+    if $WITH_TMUX; then
+        # Start tmux detached, launch a background monitor to auto-close orphaned
+        # teammate panes, then attach. The monitor polls every 3s and kills non-lead
+        # panes that have dropped back to a bash prompt after claude exits.
+        LAUNCH_CMD="tmux new-session -d -s claude '${LAUNCH_CMD}' && (/home/claude/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t claude"
+        NEEDS_SHELL=true
+        PODMAN_ARGS+=(-e "TERM=xterm-256color")
     fi
 }
 
-# Determine image tag based on CLI arg, CLAUDE_VERSION file, or default to latest
-determine_image_tag() {
-    local tag="${CLAUDE_VERSION}"
-    if [[ -z "$tag" ]]; then
-        tag=$(read_version_file)
-    fi
-    if [[ -z "$tag" ]]; then
-        tag="latest"
-    fi
-    echo "$tag"
+harness_log_status() {
+    log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
+    log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
+    log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
 }
 
-# Pull image from registry
-pull_image() {
-    local image_ref="$1"
-    log_info "Pulling image: $image_ref"
-    if ! podman pull "$image_ref"; then
-        log_error "Failed to pull image: $image_ref"
-        log_error "To build locally instead: $(basename "$0") --build"
-        return 1
-    fi
-}
-
-# Build image locally
-build_image() {
-    local tag
-    tag=$(determine_image_tag)
-    local full_tag="${LOCAL_IMAGE_NAME}:${tag}"
-
-    log_info "Building container image: $full_tag"
-    BUILD_ARGS=()
-
-    if [[ "$tag" != "latest" ]]; then
-        log_info "Using Claude Code version: $tag"
-        BUILD_ARGS+=(--build-arg "CLAUDE_VERSION=${tag}")
-    else
-        log_info "Using latest Claude Code version"
-    fi
-
-    podman build "${BUILD_ARGS[@]}" -t "$full_tag" "$SCRIPT_DIR"
-
-    # Also tag as latest for convenience
-    if [[ "$tag" != "latest" ]]; then
-        podman tag "$full_tag" "${LOCAL_IMAGE_NAME}:latest"
-    fi
-
-    log_info "Image built successfully: $full_tag"
-}
-
-if $BUILD_ONLY; then
-    build_image
-    exit 0
-fi
-
-# Determine image tag and reference
-IMAGE_TAG=$(determine_image_tag)
-
-# On macOS, auto-detect and prefer local ARM64 image to avoid x86 emulation
-if [[ "$OS_TYPE" == "macos" ]] && ! $USE_LOCAL && podman image exists "${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"; then
-    log_info "Found local ARM64 image, using it to avoid emulation"
-    USE_LOCAL=true
-fi
-
-if $USE_LOCAL; then
-    # Local mode: use locally-built image
-    IMAGE_REF="${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"
-    if ! podman image exists "$IMAGE_REF"; then
-        log_error "Local image '$IMAGE_REF' not found"
-        log_error "Build it with: $(basename "$0") --build"
-        exit 1
-    fi
-    log_info "Using local image: $IMAGE_REF"
-else
-    # Registry mode: pull from quay.io
-    IMAGE_REF="${FULL_REGISTRY_IMAGE}:${IMAGE_TAG}"
-    if ! pull_image "$IMAGE_REF"; then
-        exit 1
-    fi
-fi
-
-# Prepare mount points
-WORKSPACE_DIR="$(pwd -P)"
-SESSION_ID=$(generate_session_id)
-CONTAINER_NAME=$(generate_container_name "$WORKSPACE_DIR" "$SESSION_ID")
-CLAUDE_CONFIG_DIR="${HOME}/.claude"
-GOOGLE_CONFIG_DIR="${HOME}/.config/gcloud"
-
-# Ensure claude config directory exists
-if [[ ! -d "$CLAUDE_CONFIG_DIR" ]]; then
-    log_info "Creating Claude config directory: $CLAUDE_CONFIG_DIR"
-    mkdir -p "$CLAUDE_CONFIG_DIR"
-fi
-
-# Ensure global config files exist
-ensure_global_config "$CLAUDE_CONFIG_DIR"
-
-# Setup project-specific directories
-PROJECT_DATA_DIR=$(setup_project_dirs "$WORKSPACE_DIR" "$CLAUDE_CONFIG_DIR")
-migrate_if_needed "$PROJECT_DATA_DIR" "$CLAUDE_CONFIG_DIR"
-
-# Auto-detect npm global prefix if not explicitly set
-if [[ -z "$NPM_GLOBAL" ]]; then
-    NPM_GLOBAL=$(npm config get prefix 2>/dev/null || echo "")
-fi
-
-# Build podman run arguments
-PODMAN_ARGS=(
-    --rm
-    -it
-    --name "$CONTAINER_NAME"
-    --hostname ccbox
-    --userns=keep-id:uid=1000,gid=1000
-    -e PROJECT_NAME="$(basename "$WORKSPACE_DIR")"
-    -v "${WORKSPACE_DIR}:/workspace$(vol_flag "")"
-    # Global settings (shared across all projects)
-    -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/themes:/home/claude/.claude/themes$(vol_flag "")"
-    # Additional global directories for core features
-    -v "${CLAUDE_CONFIG_DIR}/file-history:/home/claude/.claude/file-history$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/claude/.claude/paste-cache$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/cache:/home/claude/.claude/cache$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/backups:/home/claude/.claude/backups$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/claude/.claude/stats-cache.json$(vol_flag "")"
-    -v "${CLAUDE_CONFIG_DIR}/workflows:/home/claude/.claude/workflows$(vol_flag "")"
-    # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
-    # stores a PID, which is meaningless across PID namespaces (host vs container,
-    # or container vs container). Each container uses its own ephemeral copy
-    # pre-created in the image, so daemons never clobber each other.
-    # Project-specific data (isolated per project)
-    -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/projects:/home/claude/.claude/projects$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/teams:/home/claude/.claude/teams$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
-    # Additional project-scoped directories for shell/session features
-    -v "${PROJECT_DATA_DIR}/shell-snapshots:/home/claude/.claude/shell-snapshots$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/session-env:/home/claude/.claude/session-env$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/logs:/home/claude/.claude/logs$(vol_flag "")"
-    -v "${PROJECT_DATA_DIR}/debug:/home/claude/.claude/debug$(vol_flag "")"
-    # Other config files
-    -v "${HOME}/.claude.json:/home/claude/.claude.json$(vol_flag "")"
-    -e "TERM=$($WITH_TMUX && echo xterm-256color || echo "${TERM:-xterm-256color}")"
-    -e "LANG=${LANG:-C.UTF-8}"
-    -w /workspace
-)
-
-# Add optional mounts that may not exist on all systems
-if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
-    PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/claude/.config/gcloud$(vol_flag "ro")")
-fi
-
-if [[ -f "${HOME}/.gitconfig" ]]; then
-    PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig$(vol_flag "ro")")
-fi
-
-# Add status line script if it exists
-if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
-    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh$(vol_flag "ro")")
-fi
-
-# Add user's global RULES.md file if it exists (read-only)
-if [[ -f "${CLAUDE_CONFIG_DIR}/RULES.md" ]]; then
-    PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/claude/.claude/RULES.md$(vol_flag "ro")")
-fi
-
-# Enterprise managed settings (read-only)
-if [[ -d /etc/claude-code ]]; then
-    PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
-fi
-
-# Linux-specific mounts and environment variables
-if [[ "$OS_TYPE" == "linux" ]]; then
-    # Timezone
-    if [[ -f /etc/localtime ]]; then
-        PODMAN_ARGS+=(-v /etc/localtime:/etc/localtime:ro)
-    fi
-    PODMAN_ARGS+=(-e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}")
-
-    # PulseAudio socket for audio support
-    if [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-        PODMAN_ARGS+=(
-            -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native$(vol_flag "")"
-            -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
-        )
-    fi
-fi
-
-# Generic passthrough: forward all ANTHROPIC_* and CLAUDE_CODE_* env vars from host
-while IFS='=' read -r name value; do
-    PODMAN_ARGS+=(-e "${name}=${value}")
-done < <(env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_AX_|CLAUDE_ENABLE_|CLAUDE_AUTOCOMPACT_)')
-
-# Also pass through specific non-prefixed vars if set
-for var in DISABLE_AUTOUPDATER DISABLE_AUTO_COMPACT MAX_THINKING_TOKENS \
-           MCP_TIMEOUT MCP_TOOL_TIMEOUT MAX_MCP_OUTPUT_TOKENS \
-           API_TIMEOUT_MS API_FORCE_IDLE_TIMEOUT BASH_DEFAULT_TIMEOUT_MS \
-           BASH_MAX_TIMEOUT_MS BASH_MAX_OUTPUT_LENGTH \
-           ENABLE_TOOL_SEARCH NODE_OPTIONS \
-           NO_COLOR FORCE_COLOR \
-           AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-           AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK \
-           OTEL_METRICS_EXPORTER OTEL_LOG_ASSISTANT_RESPONSES \
-           OTEL_LOG_USER_PROMPTS OTEL_LOG_TOOL_DETAILS \
-           OTEL_RESOURCE_ATTRIBUTES; do
-    if [[ -n "${!var}" ]]; then
-        PODMAN_ARGS+=(-e "${var}=${!var}")
-    fi
-done
-
-# Agent teams (experimental feature)
-if $WITH_TEAMS; then
-    PODMAN_ARGS+=(-e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)
-fi
-
-# Clipboard/display access for image pasting (CTRL+V)
-if ! $NO_CLIPBOARD; then
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
-            # Wayland clipboard access
-            PODMAN_ARGS+=(
-                -v "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:ro"
-                -e "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
-                -e "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-            )
-        elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
-            # X11 clipboard access
-            PODMAN_ARGS+=(
-                -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
-                -e "DISPLAY=${DISPLAY}"
-            )
-            if [[ -f "${HOME}/.Xauthority" ]]; then
-                PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/claude/.Xauthority$(vol_flag "ro")")
-            fi
-        fi
-    elif [[ "$OS_TYPE" == "macos" ]]; then
-        # macOS: basic X11 support via XQuartz (if available)
-        if [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
-            PODMAN_ARGS+=(
-                -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
-                -e "DISPLAY=${DISPLAY}"
-            )
-        fi
-    fi
-fi
-
-# Mount npm global packages (read-only) if available and not a system directory
-if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
-    # On macOS, only /Users/* or /private/* paths work with Podman VM
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if [[ "$NPM_GLOBAL" == /Users/* || "$NPM_GLOBAL" == /private/* ]]; then
-            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
-        else
-            log_warn "npm global prefix '$NPM_GLOBAL' not accessible in Podman VM, skipping"
-        fi
-    else
-        PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/claude/.npm-global$(vol_flag "ro")")
-    fi
-fi
-
-# GitHub token injection for authentication
-# Token is auto-detected from host's gh CLI unless --no-github is specified
-GH_TOKEN_VALUE=""
-GH_TOKEN_SOURCE=""
-
-if ! $NO_GITHUB; then
-    if [[ -n "$GITHUB_TOKEN" ]]; then
-        # Use explicitly provided token
-        GH_TOKEN_VALUE="$GITHUB_TOKEN"
-        GH_TOKEN_SOURCE="provided"
-    elif command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
-        # Auto-detect from host's gh CLI
-        GH_TOKEN_VALUE=$(gh auth token 2>/dev/null || true)
-        GH_TOKEN_SOURCE="auto-detected"
-    fi
-
-    # Pass token to container if available
-    if [[ -n "$GH_TOKEN_VALUE" ]]; then
-        PODMAN_ARGS+=(-e "GH_TOKEN=${GH_TOKEN_VALUE}")
-        PODMAN_ARGS+=(-e "GITHUB_TOKEN=${GH_TOKEN_VALUE}")
-    elif $WITH_GITHUB; then
-        log_warn "GitHub token requested but not available"
-        log_warn "Run 'gh auth login' on host to authenticate with GitHub"
-    fi
-fi
-
-# Add firewall capabilities if firewall is enabled (Linux only)
-if ! $NO_FIREWALL; then
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        PODMAN_ARGS+=(
-            --cap-add=NET_ADMIN
-            --cap-add=NET_RAW
-        )
-    else
-        log_warn "Firewall feature is only supported on Linux, ignoring --with-firewall flag"
-        NO_FIREWALL=true
-    fi
-fi
-
-# Safe mode: disable all customizations (CLAUDE.md, plugins, skills, hooks, MCP servers)
-if $SAFE_MODE; then
-    EXTRA_ARGS+=(--safe-mode)
-fi
-
-# Build the claude launch command
-# Wraps claude in tmux if --with-tmux is set, with optional firewall init
-# Claude must be the direct process in the tmux pane (not wrapped in bash)
-# so that Ctrl+C (SIGINT) reaches it properly
-CLAUDE_CMD="claude ${EXTRA_ARGS[*]}"
-if $WITH_TMUX; then
-    # Start tmux detached, launch a background monitor to auto-close orphaned
-    # teammate panes, then attach. The monitor polls every 3s and kills non-lead
-    # panes that have dropped back to a bash prompt after claude exits.
-    CLAUDE_CMD="tmux new-session -d -s claude '${CLAUDE_CMD}' && (/home/claude/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t claude"
-fi
-
-if $NO_FIREWALL && ! $WITH_TMUX; then
-    PODMAN_ARGS+=("$IMAGE_REF" claude "${EXTRA_ARGS[@]}")
-elif $NO_FIREWALL; then
-    PODMAN_ARGS+=("$IMAGE_REF" /bin/bash -c "${CLAUDE_CMD}")
-else
-    # Start with firewall initialization, then run claude
-    PODMAN_ARGS+=("$IMAGE_REF" /bin/bash -c "sudo /usr/local/bin/init-firewall.sh && ${CLAUDE_CMD}")
-fi
-
-log_info "Starting Claude Code container..."
-log_info "Workspace: $WORKSPACE_DIR"
-log_info "Session: $SESSION_ID"
-log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
-log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
-log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
-log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
-log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
-if $NO_GITHUB; then
-    log_info "GitHub: disabled"
-elif [[ -n "$GH_TOKEN_VALUE" ]]; then
-    log_info "GitHub: enabled ($GH_TOKEN_SOURCE)"
-else
-    log_info "GitHub: not available (run 'gh auth login' to enable)"
-fi
-
-# Debug mode: print the podman command
-if [[ -n "${DEBUG}" ]]; then
-    echo "DEBUG: podman run command:" >&2
-    printf '%q ' podman run "${PODMAN_ARGS[@]}" >&2
-    echo >&2
-fi
-
-# Run the container
-exec podman run "${PODMAN_ARGS[@]}"
+# Load the shared engine and run
+# shellcheck source=lib/box-common.sh
+source "${SCRIPT_DIR}/lib/box-common.sh"
+box_main "$@"

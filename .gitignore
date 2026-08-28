@@ -3,3 +3,5 @@
 
 # Playwright MCP logs
 .playwright-mcp/
+
+opencode.json

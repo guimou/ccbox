@@ -1,24 +1,14 @@
-# Allowed domains for the firewall
+# Allowed domains for the firewall - common to all harnesses
 # One domain per line, comments start with #
+# Harness-specific domains live in firewall-domains-{claude,opencode,qwencode}.txt
 
-# Anthropic APIs
-api.anthropic.com
-sentry.io
-statsig.anthropic.com
-statsig.com
-
-# GitHub (for git operations)
+# GitHub (for git operations and release downloads)
 github.com
 api.github.com
+objects.githubusercontent.com
 
 # npm registry (for potential package installations)
 registry.npmjs.org
-
-# Claude.ai (OAuth login, install script, Remote Control)
-claude.ai
-
-# Documentation (docs.anthropic.com redirects here)
-code.claude.com
 
 # Python packages (pip/uv installs)
 pypi.org

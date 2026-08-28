@@ -1,10 +1,10 @@
 #!/bin/bash
-# Firewall initialization script for Claude Code container
+# Firewall initialization script for the harness container (ccbox/ocbox/qcbox)
 # Restricts network access to allowed domains only
 
 set -e
 
-DOMAINS_FILE="/etc/ccbox/firewall-domains.txt"
+DOMAINS_FILE="/etc/codebox/firewall-domains.txt"
 
 # Colors for output
 RED='\033[0;31m'
@@ -143,11 +143,11 @@ else
     log_info "Firewall verification: example.com correctly blocked"
 fi
 
-# Test that allowed domain works
-if curl -s --connect-timeout 5 https://api.anthropic.com >/dev/null 2>&1; then
-    log_info "Firewall verification: api.anthropic.com accessible"
+# Test that allowed domain works (github.com is in the common allowlist)
+if curl -s --connect-timeout 5 https://api.github.com >/dev/null 2>&1; then
+    log_info "Firewall verification: api.github.com accessible"
 else
-    log_warn "Firewall verification: api.anthropic.com not accessible (may be normal if no API key)"
+    log_warn "Firewall verification: api.github.com not accessible"
 fi
 
 log_info "Firewall initialization complete!"

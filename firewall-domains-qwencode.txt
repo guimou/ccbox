@@ -1,0 +1,15 @@
+# Allowed domains for the firewall - Qwen Code specific
+
+# Qwen OAuth (device-code flow) and API portal
+chat.qwen.ai
+portal.qwen.ai
+
+# DashScope / Alibaba Cloud Model Studio
+dashscope.aliyuncs.com
+dashscope-intl.aliyuncs.com
+coding.dashscope.aliyuncs.com
+coding-intl.dashscope.aliyuncs.com
+
+# Other supported providers (add yours if missing)
+api-inference.modelscope.cn
+openrouter.ai

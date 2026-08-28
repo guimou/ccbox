@@ -1,0 +1,14 @@
+# Allowed domains for the firewall - OpenCode specific
+
+# OpenCode (install, config schemas, auth, Zen/share API)
+opencode.ai
+api.opencode.ai
+
+# Model/provider registry, fetched at startup
+models.dev
+
+# Common model providers (add yours if missing)
+api.anthropic.com
+api.openai.com
+openrouter.ai
+generativelanguage.googleapis.com
