@@ -73,8 +73,11 @@ OPTIONAL_MOUNT_STATUS=()
 # projects)"), or "<label>: not mounted (use --with-<opt>)", where <label>
 # is $6 and <opt> defaults to the flag name with a leading "WITH_" stripped
 # and lowercased (so WITH_GCLOUD -> "gcloud", matching --with-gcloud).
+# Pass "no_status" as $8 to record no status line (the caller prints its own
+# summary line, e.g. from harness_log_status).
 add_optional_mount() {
     local flag_var="$1" host_path="$2" container_path="$3" opts="${4:-}" force_mount="${5:-}"
+    local no_status="${8:-}"
     local flag_opt="${flag_var#WITH_}"
     flag_opt="${flag_opt,,}"
     local status_label="${6:-$flag_opt}" mounted_suffix="${7:-}"
@@ -100,11 +103,15 @@ add_optional_mount() {
 
     if $exists; then
         PODMAN_ARGS+=(-v "${path}:${container_path}$(vol_flag "$opts")")
-        OPTIONAL_MOUNT_STATUS+=("${status_label}: mounted${mounted_suffix}")
+        if [[ "$no_status" != no_status ]]; then
+            OPTIONAL_MOUNT_STATUS+=("${status_label}: mounted${mounted_suffix}")
+        fi
     else
         log_warn "$path not found on host, --with-${flag_opt} ignored"
         eval "$flag_var=false"
-        OPTIONAL_MOUNT_STATUS+=("${status_label}: not mounted (use --with-${flag_opt})")
+        if [[ "$no_status" != no_status ]]; then
+            OPTIONAL_MOUNT_STATUS+=("${status_label}: not mounted (use --with-${flag_opt})")
+        fi
     fi
 }
 
