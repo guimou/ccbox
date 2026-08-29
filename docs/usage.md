@@ -87,7 +87,7 @@ ccbox
 
 ```bash
 # Shell aliases in ~/.bashrc
-alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox'
+alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox --with-gcloud'
 alias ccbox-anthropic='ANTHROPIC_API_KEY="sk-ant-..." ccbox'
 
 # Inline (no persistent state)
