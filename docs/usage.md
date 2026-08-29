@@ -70,10 +70,10 @@ ccbox
 ```bash
 export CLAUDE_CODE_USE_VERTEX=1
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
-ccbox
+ccbox --with-gcloud
 ```
 
-Launch with `--with-gcloud` to mount your gcloud credentials (`~/.config/gcloud`) read-only.
+The `--with-gcloud` flag mounts your gcloud credentials (`~/.config/gcloud`) read-only.
 
 **AWS Bedrock:**
 
