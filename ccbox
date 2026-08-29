@@ -94,7 +94,10 @@ harness_ensure_config() {
     [[ -f "${config_dir}/settings.json" ]] || echo '{}' > "${config_dir}/settings.json"
     [[ -f "${config_dir}/settings.local.json" ]] || echo '{}' > "${config_dir}/settings.local.json"
     if $WITH_CREDENTIALS; then
-        [[ -f "${config_dir}/.credentials.json" ]] || echo '{}' > "${config_dir}/.credentials.json"
+        if [[ ! -f "${config_dir}/.credentials.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${config_dir}/.credentials.json"
+            echo '{}' > "${config_dir}/.credentials.json"
+        fi
     fi
     [[ -f "${config_dir}/keybindings.json" ]] || echo '{"bindings":[]}' > "${config_dir}/keybindings.json"
     # Global memory file (empty is fine)
@@ -195,14 +198,11 @@ harness_mounts() {
         PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
     fi
 
-    # Anthropic credentials (opt-in via --with-credentials, read-write)
+    # Anthropic credentials (opt-in via --with-credentials, read-write).
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here and no "file missing" branch is needed.
     if $WITH_CREDENTIALS; then
-        if [[ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]]; then
-            PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/coder/.claude/.credentials.json$(vol_flag "")")
-        else
-            log_warn "${CLAUDE_CONFIG_DIR}/.credentials.json not found on host, --with-credentials ignored"
-            WITH_CREDENTIALS=false
-        fi
+        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/coder/.claude/.credentials.json$(vol_flag "")")
     fi
 }
 
