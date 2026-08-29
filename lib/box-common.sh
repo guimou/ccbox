@@ -57,6 +57,57 @@ vol_flag() {
     fi
 }
 
+# Status lines for opt-in mounts added via add_optional_mount, printed by
+# box_main after harness_log_status.
+OPTIONAL_MOUNT_STATUS=()
+
+# Opt-in mount helper: if the flag named by $1 is set, mount $2 (host path)
+# at $3 (container path) with $4 as mount opts (e.g. "ro"), appending to
+# PODMAN_ARGS via vol_flag. If the host path is missing, warn and reset the
+# flag to false (the summary then reports the mount as not mounted). A host
+# path ending in "/" is expected to be a directory, any other path a file.
+# Pass "force_mount" as $5 for paths that are guaranteed to exist (created
+# earlier, e.g. by harness_ensure_config). When the flag was set, records a
+# status line in OPTIONAL_MOUNT_STATUS for the launch summary:
+# "<label>: mounted" plus an optional suffix ($7, e.g. " (shared across
+# projects)"), or "<label>: not mounted (use --with-<opt>)", where <label>
+# is $6 and <opt> defaults to the flag name with a leading "WITH_" stripped
+# and lowercased (so WITH_GCLOUD -> "gcloud", matching --with-gcloud).
+add_optional_mount() {
+    local flag_var="$1" host_path="$2" container_path="$3" opts="${4:-}" force_mount="${5:-}"
+    local flag_opt="${flag_var#WITH_}"
+    flag_opt="${flag_opt,,}"
+    local status_label="${6:-$flag_opt}" mounted_suffix="${7:-}"
+    if ! declare -p "$flag_var" >/dev/null 2>&1; then
+        log_error "add_optional_mount: unknown flag variable '$flag_var'"
+        return 1
+    fi
+    # Read the flag's current value; a falsy flag means the opt-in mount
+    # was not requested, so there is nothing to do.
+    local flag_value=${!flag_var:-}
+    [[ "$flag_value" == true ]] || return 0
+
+    # A trailing "/" only marks the expected type; the mount and warning use
+    # the stripped path.
+    local path="${host_path%/}" exists=false
+    if [[ "$force_mount" == force_mount ]]; then
+        exists=true
+    elif [[ "$host_path" == */ && -d "$host_path" ]]; then
+        exists=true
+    elif [[ -f "$path" ]]; then
+        exists=true
+    fi
+
+    if $exists; then
+        PODMAN_ARGS+=(-v "${path}:${container_path}$(vol_flag "$opts")")
+        OPTIONAL_MOUNT_STATUS+=("${status_label}: mounted${mounted_suffix}")
+    else
+        log_warn "$path not found on host, --with-${flag_opt} ignored"
+        eval "$flag_var=false"
+        OPTIONAL_MOUNT_STATUS+=("${status_label}: not mounted (use --with-${flag_opt})")
+    fi
+}
+
 # Registry configuration
 REGISTRY="quay.io"
 FULL_REGISTRY_IMAGE="${REGISTRY}/${REGISTRY_IMAGE}"
@@ -376,10 +427,12 @@ box_main() {
                 shift
                 ;;
             --with-gcloud)
+                # shellcheck disable=SC2034  # read via add_optional_mount indirection
                 WITH_GCLOUD=true
                 shift
                 ;;
             --with-gitconfig)
+                # shellcheck disable=SC2034  # read via add_optional_mount indirection
                 WITH_GITCONFIG=true
                 shift
                 ;;
@@ -499,23 +552,8 @@ box_main() {
     harness_mounts
 
     # Add optional mounts that may not exist on all systems
-    if $WITH_GCLOUD; then
-        if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
-            PODMAN_ARGS+=(-v "${GOOGLE_CONFIG_DIR}:/home/coder/.config/gcloud$(vol_flag "ro")")
-        else
-            log_warn "$GOOGLE_CONFIG_DIR not found on host, --with-gcloud ignored"
-            WITH_GCLOUD=false
-        fi
-    fi
-
-    if $WITH_GITCONFIG; then
-        if [[ -f "${HOME}/.gitconfig" ]]; then
-            PODMAN_ARGS+=(-v "${HOME}/.gitconfig:/home/coder/.gitconfig$(vol_flag "ro")")
-        else
-            log_warn "${HOME}/.gitconfig not found on host, --with-gitconfig ignored"
-            WITH_GITCONFIG=false
-        fi
-    fi
+    add_optional_mount WITH_GCLOUD "${GOOGLE_CONFIG_DIR}/" "/home/coder/.config/gcloud" "ro"
+    add_optional_mount WITH_GITCONFIG "${HOME}/.gitconfig" "/home/coder/.gitconfig" "ro"
 
     # Linux-specific mounts and environment variables
     if [[ "$OS_TYPE" == "linux" ]]; then
@@ -660,8 +698,9 @@ box_main() {
     else
         log_info "GitHub: not available (run 'gh auth login' to enable)"
     fi
-    log_info "gcloud: $(if $WITH_GCLOUD; then echo 'mounted'; else echo 'not mounted (use --with-gcloud)'; fi)"
-    log_info "gitconfig: $(if $WITH_GITCONFIG; then echo 'mounted'; else echo 'not mounted (use --with-gitconfig)'; fi)"
+    for status in "${OPTIONAL_MOUNT_STATUS[@]}"; do
+        log_info "$status"
+    done
 
     # Debug mode: print the podman command
     if [[ -n "${DEBUG}" ]]; then

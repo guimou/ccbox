@@ -200,10 +200,10 @@ harness_mounts() {
 
     # Anthropic credentials (opt-in via --with-credentials, read-write).
     # harness_ensure_config already created an empty file when missing, so it
-    # always exists here and no "file missing" branch is needed.
-    if $WITH_CREDENTIALS; then
-        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/coder/.claude/.credentials.json$(vol_flag "")")
-    fi
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # add_optional_mount also records the "Credentials:" status line for the
+    # launch summary.
+    add_optional_mount WITH_CREDENTIALS "${CLAUDE_CONFIG_DIR}/.credentials.json" "/home/coder/.claude/.credentials.json" "" force_mount "Credentials" " (shared across projects)"
 }
 
 harness_pre_run() {
@@ -235,7 +235,6 @@ harness_log_status() {
     log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
-    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
 }
 
 # Load the shared engine and run. Two supported layouts:
