@@ -127,7 +127,11 @@ harness_setup_project() {
     if [[ ! -f "${PROJECT_DATA_DIR}/.migrated" && -f "${CLAUDE_CONFIG_DIR}/history.jsonl" ]]; then
         log_info "First run with project isolation for this workspace."
         if [[ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]]; then
-            log_info "Credentials will be shared across all projects."
+            if $WITH_CREDENTIALS; then
+                log_info "Credentials will be shared across all projects."
+            else
+                log_info "Credentials are not shared by default; use --with-credentials to mount ~/.claude/.credentials.json."
+            fi
         fi
         touch "${PROJECT_DATA_DIR}/.migrated"
         log_info "Project-specific data stored in: ${PROJECT_DATA_DIR}"
