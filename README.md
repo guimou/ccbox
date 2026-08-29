@@ -80,7 +80,7 @@ ccbox --help              # All options
 
 API keys and provider settings are forwarded from host environment variables (e.g. `ANTHROPIC_API_KEY`, Vertex AI, Bedrock) — see the [usage guide](docs/usage.md#api-provider-configuration).
 
-> **Breaking change:** host credential files are no longer mounted by default. Pass `--with-gcloud` to mount `~/.config/gcloud` (e.g. for Vertex AI), `--with-gitconfig` to mount `~/.gitconfig`, and `ccbox --with-credentials` to mount `~/.claude/.credentials.json` (API key or OAuth). GitHub token injection (`GH_TOKEN`) is unaffected.
+> **Breaking change:** host credential files are no longer mounted by default. Pass `--with-gcloud` to mount `~/.config/gcloud` (e.g. for Vertex AI), `--with-gitconfig` to mount `~/.gitconfig`, and `--with-credentials` to mount the harness credential file — `~/.claude/.credentials.json` (ccbox), `~/.local/share/opencode/auth.json` (ocbox), `~/.qwen/oauth_creds.json` (qcbox). GitHub token injection (`GH_TOKEN`) is unaffected.
 
 ## Documentation
 

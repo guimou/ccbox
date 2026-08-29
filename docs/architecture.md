@@ -12,8 +12,8 @@ One repository produces three container images and three launchers from a shared
 
 - **Mount only the current folder** — the project directory is the only host code visible inside the container, at `/workspace`.
 - **Per-project isolation** — each project gets its own history and session data; sessions of different projects never mix.
-- **Share only what is truly shareable** — credentials, global settings, and caches are shared across projects; everything stateful is per-project.
-- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), Claude credentials (read-write, opt-in via `ccbox --with-credentials`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
+- **Share only what is truly shareable** — global settings and caches are shared across projects; credentials are opt-in (`--with-credentials`); everything stateful is per-project.
+- **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), harness credentials (read-write, opt-in via `--with-credentials`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
 - **Rootless and SELinux-friendly** — Podman rootless with `--userns=keep-id`, `:z` volume labels on Linux.
 
 ## One Dockerfile, Three Images
@@ -57,11 +57,11 @@ The wrappers locate the engine relative to their (symlink-resolved) location, su
 
 Every project mounts at `/workspace` inside its container. Harnesses that key their internal state by project *path* (OpenCode, Qwen Code) would therefore collide: every project would look like the same project.
 
-The launchers solve this **host-side**: each project gets its own host directory (keyed by `{sanitized-name}_{md5-hash-of-path}`) which is mounted *as* the harness's data/state directory inside the container. Shared items (credentials) are file-mounted on top.
+The launchers solve this **host-side**: each project gets its own host directory (keyed by `{sanitized-name}_{md5-hash-of-path}`) which is mounted *as* the harness's data/state directory inside the container. Shared items are file-mounted on top; the credential file is only shared when `--with-credentials` is passed.
 
 ## Per-Harness Mounts
 
-Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `ccbox --with-credentials` (`.credentials.json`, rw).
+Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `--with-credentials` (the harness credential file, rw: `.credentials.json` for ccbox, `auth.json` for ocbox, `oauth_creds.json` for qcbox).
 
 ### ccbox (Claude Code)
 
@@ -128,18 +128,18 @@ The background agent daemon (`~/.claude/daemon/`) is deliberately **not** shared
 | Location | Purpose | Scope |
 |----------|---------|-------|
 | `~/.config/opencode/` | Global config, agents, commands, themes | Shared |
-| `~/.local/share/opencode/auth.json` | Provider credentials | Shared |
+| `~/.local/share/opencode/auth.json` | Provider credentials (opt-in, `--with-credentials`) | Shared (rw, not mounted by default) |
 | `~/.cache/opencode/` | Provider packages, LSP binaries | Shared |
 | `~/.local/share/ocbox-projects/{name}_{hash}/data/` | Sessions, storage, logs (mounted as the container data dir) | Per-project |
 
-The per-project host directory is mounted as the container's entire OpenCode data directory (`~/.local/share/opencode`), with the shared `auth.json` file-mounted on top so credentials stay global.
+The per-project host directory is mounted as the container's entire OpenCode data directory (`~/.local/share/opencode`); with `--with-credentials`, the shared `auth.json` is additionally file-mounted on top so credentials stay global. Without the flag the container uses its own empty credential file, so `opencode auth login` inside the container does not persist to the host.
 
 ### qcbox (Qwen Code)
 
 | Location | Purpose | Scope |
 |----------|---------|-------|
 | `~/.qwen/settings.json` | User settings | Shared |
-| `~/.qwen/oauth_creds.json` | Qwen OAuth credentials | Shared |
+| `~/.qwen/oauth_creds.json` | Qwen OAuth credentials (opt-in, `--with-credentials`) | Shared (rw, not mounted by default) |
 | `~/.qwen/QWEN.md` | Global memory file | Shared |
 | `~/.qwen/qcbox-projects/{name}_{hash}/tmp/` | Shell history, checkpoints | Per-project |
 | `~/.qwen/qcbox-projects/{name}_{hash}/file-history/` | File backups | Per-project |

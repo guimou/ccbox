@@ -187,11 +187,15 @@ RUN set -eu; \
                  /home/coder/.local/share/opencode \
                  /home/coder/.local/state/opencode \
                  /home/coder/.cache/opencode && \
+        # Empty credentials store (host auth.json is opt-in via --with-credentials)
+        echo '{}' > /home/coder/.local/share/opencode/auth.json && \
         chown -R coder:coder /home/coder/.config /home/coder/.local /home/coder/.cache ;; \
     qwencode) \
         npm install -g "@qwen-code/qwen-code@${HARNESS_VERSION:-latest}" && \
         mkdir -p /home/coder/.qwen/tmp \
                  /home/coder/.qwen/file-history && \
+        # Empty credentials store (host oauth_creds.json is opt-in via --with-credentials)
+        echo '{}' > /home/coder/.qwen/oauth_creds.json && \
         chown -R coder:coder /home/coder/.qwen && \
         # System defaults: pin version (no auto-update) and never nest the
         # Qwen sandbox inside this container

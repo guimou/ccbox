@@ -11,8 +11,9 @@
 #
 # Because every project is mounted at /workspace inside the container, the
 # data dir is isolated per project on the host (~/.local/share/ocbox-projects/)
-# so sessions from different projects never mix; only auth.json (credentials)
-# and the cache are shared across projects.
+# so sessions from different projects never mix; the cache is shared across
+# projects. auth.json (credentials) is only shared when launched with
+# --with-credentials (opt-in), mirroring ccbox.
 
 set -e
 
@@ -35,6 +36,9 @@ REGISTRY_IMAGE="guimou/ocbox"
 VERSION_FLAG="--opencode-version"
 VERSION_FILE="OPENCODE_VERSION"
 
+# Harness-specific flags
+WITH_CREDENTIALS=false
+
 # Env vars forwarded from the host (OpenCode config + common provider keys)
 ENV_PASSTHROUGH_REGEX='^(OPENCODE_|ANTHROPIC_|OPENAI_|OPENROUTER_|GEMINI_|GOOGLE_|AZURE_|DEEPSEEK_|MISTRAL_|XAI_|GROQ_)'
 ENV_PASSTHROUGH_VARS=(
@@ -42,6 +46,22 @@ ENV_PASSTHROUGH_VARS=(
     AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
     AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
 )
+
+harness_parse_arg() {
+    case $1 in
+        --with-credentials)
+            WITH_CREDENTIALS=true
+            ARG_SHIFT=1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+harness_extra_help() {
+    echo "  --with-credentials       Mount ~/.local/share/opencode/auth.json read-write (provider credentials)"
+}
 
 # Ensure global config files and directories exist
 harness_ensure_config() {
@@ -51,8 +71,12 @@ harness_ensure_config() {
 
     mkdir -p "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_CACHE_DIR"
 
-    # Credentials store, shared across all projects (written by `opencode auth login`)
-    [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]] || echo '{}' > "${OPENCODE_DATA_DIR}/auth.json"
+    # Credentials store, shared across all projects (written by `opencode auth login`).
+    # Opt-in via --with-credentials; the image ships an empty one so OpenCode
+    # always finds auth.json inside the container.
+    if $WITH_CREDENTIALS; then
+        [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]] || echo '{}' > "${OPENCODE_DATA_DIR}/auth.json"
+    fi
 }
 
 # Setup project-specific data dir under ~/.local/share/ocbox-projects/
@@ -67,11 +91,24 @@ harness_mounts() {
         -v "${OPENCODE_CONFIG_DIR}:/home/coder/.config/opencode$(vol_flag "")"
         # Data dir isolated per project (sessions, storage, logs)
         -v "${PROJECT_DATA_DIR}/data:/home/coder/.local/share/opencode$(vol_flag "")"
-        # Credentials shared across projects, mounted over the per-project data dir
-        -v "${OPENCODE_DATA_DIR}/auth.json:/home/coder/.local/share/opencode/auth.json$(vol_flag "")"
         # Cache shared across projects (provider packages, LSP binaries)
         -v "${OPENCODE_CACHE_DIR}:/home/coder/.cache/opencode$(vol_flag "")"
     )
+
+    # Provider credentials (opt-in via --with-credentials, read-write)
+    if $WITH_CREDENTIALS; then
+        if [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]]; then
+            # Mounted over the per-project data dir so credentials stay shared
+            PODMAN_ARGS+=(-v "${OPENCODE_DATA_DIR}/auth.json:/home/coder/.local/share/opencode/auth.json$(vol_flag "")")
+        else
+            log_warn "${OPENCODE_DATA_DIR}/auth.json not found on host, --with-credentials ignored"
+            WITH_CREDENTIALS=false
+        fi
+    fi
+}
+
+harness_log_status() {
+    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
 }
 
 # Load the shared engine and run. Two supported layouts:
