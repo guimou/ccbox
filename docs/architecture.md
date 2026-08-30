@@ -63,6 +63,20 @@ The launchers solve this **host-side**: each project gets its own host directory
 
 Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `--with-credentials` (the harness credential file, rw: `.credentials.json` for ccbox, `auth.json` for ocbox, `oauth_creds.json` for qcbox).
 
+### What credentials can reach the container
+
+Three independent channels; only one is gated by a flag. A container is credential-free only if **all three** carry no key:
+
+| Channel | Always or opt-in? | ccbox | ocbox | qcbox |
+|---------|-------------------|-------|-------|-------|
+| **Credential store file** (OAuth session / API key written by the harness) | **Opt-in** — only with `--with-credentials` | `~/.claude/.credentials.json` | `~/.local/share/opencode/auth.json` | `~/.qwen/oauth_creds.json` |
+| **Main config** (the settings/config the harness needs to run; always mounted so the harness behaves correctly) | **Always** | `~/.claude/settings.json`, `settings.local.json`, `~/.claude.json` | whole `~/.config/opencode/` dir (incl. `opencode.json`) | `~/.qwen/settings.json` (+ home `~/.qwen/.env` ro if present) |
+| **Forwarded host env vars** (prefix match + a few specific vars; see `ENV_PASSTHROUGH_REGEX` in each wrapper) | **Always** | `ANTHROPIC_*`, `CLAUDE_CODE_*`, `CLAUDE_AX_*`, `CLAUDE_ENABLE_*`, `CLAUDE_AUTOCOMPACT_*`, `AWS_*`, `OTEL_*`, a few specific | `OPENCODE_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `AWS_*` | `QWEN_*`, `OPENAI_*`, `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*` |
+
+The key point that surprises people: **`--with-credentials` does not control the main config or the env vars.** If an API key is stored in the always-mounted config (an `"env"` block, or a provider `apiKey`/`envKey`), or is exported on the host and matches a forwarded prefix, it reaches the container whether or not `--with-credentials` is passed. That is the intended trade-off for mounting the config unconditionally — the harness needs its config, and whatever is inside that config comes along. See [usage.md → API Provider Configuration](usage.md#api-provider-configuration) and [usage.md → Credentials](usage.md#credentials) for how to keep a key out (forwarded env var, or a project-local override file instead of the shared config).
+
+How each harness *consumes* a key differs — ccbox reads standard env vars directly, ocbox uses the store file or the provider's declared env var (custom providers use `{env:VAR}` in config), and qcbox resolves the env var named by `envKey` with priority shell > auto-loaded `.env` > settings `env` block. Details in [usage.md](usage.md#how-each-harness-reads-the-key).
+
 ### ccbox (Claude Code)
 
 ```mermaid

@@ -50,13 +50,21 @@ ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credenti
 
 ## API Provider Configuration
 
-Each launcher forwards the environment variables its harness understands from the host into the container:
+### What is passed into the container
 
-- **ccbox**: all `ANTHROPIC_*` and `CLAUDE_CODE_*` variables, plus AWS credential variables
-- **ocbox**: `OPENCODE_*` plus common provider keys (`ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, AWS credentials)
-- **qcbox**: `QWEN_*`, `OPENAI_*` (API key/base URL/model), `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`
+Every launcher always forwards the host environment variables matching its harness's prefix list (plus a few specific variables), and the shared harness config is always mounted — even without `--with-credentials`. What this means in practice:
 
-Set the appropriate variables before launching.
+| Launcher | Env var prefixes forwarded (from host) | Specific vars also forwarded | Always-mounted config that can carry credentials |
+|----------|----------------------------------------|------------------------------|---------------------------------------------------|
+| `ccbox` | `ANTHROPIC_*`, `CLAUDE_CODE_*`, `CLAUDE_AX_*`, `CLAUDE_ENABLE_*`, `CLAUDE_AUTOCOMPACT_*` | `AWS_REGION`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `OTEL_METRICS_EXPORTER`, `OTEL_LOG_*`, `OTEL_RESOURCE_ATTRIBUTES`, plus non-credential Claude-specific vars (`MAX_THINKING_TOKENS`, `MCP_TIMEOUT`, `NODE_OPTIONS`, `NO_COLOR`, …) | `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.claude.json` |
+| `ocbox` | `OPENCODE_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*` | `AWS_REGION`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, plus `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR` | the whole `~/.config/opencode/` directory (incl. `opencode.json`) |
+| `qcbox` | `QWEN_*`, `OPENAI_*`, `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*` | `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR`, `NODE_EXTRA_CA_CERTS` (non-credential) | `~/.qwen/settings.json` (a home-level `~/.qwen/.env` is also mounted read-only if present) |
+
+GitHub token injection (`GH_TOKEN`) is separate and works the same for all three (see [GitHub Authentication](#github-authentication)).
+
+> **Consequence:** if your harness's main config file contains API keys (a `"env"` block or a provider definition with an `apiKey`/`envKey`), those files are mounted into the container **regardless of `--with-credentials`** — that flag only controls the separate OAuth/credential store file (see [Credentials](#credentials)). If that is not what you want, don't keep keys in the shared config: use a shell export (or per-project override below), or a file that is *not* mounted.
+
+Set the appropriate variables on the host before launching — they are forwarded automatically:
 
 **Direct Anthropic API:**
 
@@ -97,6 +105,52 @@ ANTHROPIC_API_KEY="sk-ant-..." ccbox
 # echo 'export ANTHROPIC_API_KEY="sk-ant-..."' > .envrc && direnv allow
 ```
 
+### How each harness reads the key
+
+The forwarding above gets variables *into* the container; how the harness picks them up differs:
+
+- **ccbox (Claude Code)** — reads standard env vars directly (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_VERTEX` + `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_USE_BEDROCK` + `AWS_*`, …). The `"env"` block in any settings file is an ordinary settings level (see precedence below). Claude Code does **not** auto-load `.env` files.
+- **ocbox (OpenCode)** — for built-in providers, the key comes from `auth.json` (via `/connect` — that's the file `--with-credentials` shares) *or* from the standard env var the provider declares, e.g. `ANTHROPIC_API_KEY` (Anthropic), `OPENAI_API_KEY` (OpenAI), `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `AZURE_API_KEY` + `AZURE_RESOURCE_NAME` (Azure), `AWS_*` (Bedrock) — all covered by the forwarded prefixes. For **custom** providers, use substitution in the config instead: `"apiKey": "{env:MY_KEY}"`. OpenCode does **not** auto-load `.env` files.
+- **qcbox (Qwen Code)** — reads the API key from the env var named by `envKey` in your `modelProviders` entry (or the auth type's default, e.g. `OPENAI_API_KEY`, `DASHSCOPE_API_KEY`). Priority: shell environment > auto-loaded `.env` file > `"env"` block in settings. Qwen Code auto-loads the **first** `.env` it finds walking up from the project root: `.qwen/.env`, then `.env` (fallback: `~/.qwen/.env`, `~/.env`) — only the first file is used, and it never overrides already-set variables.
+
+### Per-project overrides (keep the shared config key-free)
+
+Each project is mounted at `/workspace`, so a project-local config file lives inside the project and **overrides the shared global config** for sessions started there — without touching your `~/.claude/`, `~/.config/opencode/`, or `~/.qwen/` files:
+
+| Launcher | Project-local override (lives in the project, read-write) |
+|----------|-----------------------------------------------------------|
+| `ccbox` | `.claude/settings.local.json` (you, this project) and `.claude/settings.json` (team-shared). Precedence: project local > project > user `~/.claude/settings.json`. |
+| `ocbox` | `opencode.json` / `opencode.jsonc` in the project root (or nearest git root). Project config overrides global `~/.config/opencode/opencode.json` for conflicting keys. |
+| `qcbox` | `.qwen/settings.json` in the project root (project settings override user settings), and/or a project `.qwen/.env` / `.env` for keys. |
+
+Example — per-project key, shared config stays clean (ccbox, shown for the others by analogy):
+
+```json
+// .claude/settings.local.json in the project (gitignore it if it holds secrets)
+{
+  "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
+}
+```
+
+```jsonc
+// ocbox: opencode.json in the project
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "openai": {
+      "options": { "apiKey": "{env:OPENAI_API_KEY}" }  // resolve from the forwarded env var
+    }
+  }
+}
+```
+
+```bash
+# qcbox: .qwen/.env in the project
+export OPENAI_API_KEY="sk-..."
+```
+
+Note: because project-local files sit in the workspace, they are visible to whatever else works in the project — treat them accordingly (gitignore them if they hold secrets, or prefer the env-var route, which leaves no file behind).
+
 ## Pin a Version (for teams)
 
 Each harness has its own version pin file in the repo directory: `CLAUDE_VERSION` (ccbox), `OPENCODE_VERSION` (ocbox), `QWENCODE_VERSION` (qcbox):
@@ -135,9 +189,14 @@ ccbox --github-token "ghp_xxx"     # Use specific token instead of auto-detectin
 
 ## Credentials
 
-By default, the host credential file is **not** mounted into the container, so no OAuth session or credential file is shared from the host. API-key auth needs nothing extra: provider keys are forwarded from the host environment automatically (`ANTHROPIC_*` for ccbox, `OPENCODE_*` plus common provider keys for ocbox, `QWEN_*`/`OPENAI_*` and others for qcbox).
+There are **two different things** that can hold credentials, and only one of them is gated by a flag:
 
-To share the harness's credential file (API key or OAuth session, shared across projects), pass `--with-credentials` to any launcher:
+1. **The harness credential store file** — a dedicated file each harness writes for OAuth sessions / API keys. This is **not** mounted by default. This is the only thing `--with-credentials` controls.
+2. **The shared config file(s)** — the main settings/config each launcher always mounts (ccbox `~/.claude/settings.json`, ocbox `~/.config/opencode/opencode.json`, qcbox `~/.qwen/settings.json`). If *you* put an API key inside one of these (an `"env"` block, or a provider's `apiKey`/`envKey`), that file travels into the container **with or without `--with-credentials`**, because the config must be mounted for the harness to behave correctly. This is a deliberate design trade-off: the config is always available, so any secret you store in it is always available too.
+
+So: omitting `--with-credentials` does **not** guarantee a credential-free container — it only keeps the dedicated credential store file private. If you store keys in your main config, they are passed regardless. To keep the container free of a given key, don't put it in the shared config; use a forwarded environment variable (see [API Provider Configuration](#api-provider-configuration)) or a project-local override file that lives in the project, not in the shared home dir. Without any of these, plain API-key auth still needs nothing extra — provider keys are forwarded from the host environment automatically.
+
+To share the harness's credential store file (API key or OAuth session, shared across projects), pass `--with-credentials` to any launcher:
 
 ```bash
 ccbox --with-credentials   # mount ~/.claude/.credentials.json (API key or OAuth)
