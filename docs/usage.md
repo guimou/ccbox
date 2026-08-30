@@ -33,11 +33,14 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--no-clipboard` | Disable host clipboard/display access |
 | `--no-github` / `--with-github` / `--github-token <t>` | Control GitHub token injection |
 | `--npm-global <dir>` | Explicit npm global prefix to mount (auto-detected otherwise) |
+| `--with-gcloud` | Mount `~/.config/gcloud` read-only (Vertex AI, opt-in) |
+| `--with-gitconfig` | Mount `~/.gitconfig` read-only (git identity, opt-in) |
+| `--with-credentials` | Mount the harness credential file read-write (opt-in; see [Credentials](#credentials)) |
 | `--list-sessions` | List active sessions for the current project |
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
-ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode` (see below).
+ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credentials` is available on all three launchers (see below).
 
 ## Sessions and Isolation
 
@@ -67,10 +70,10 @@ ccbox
 ```bash
 export CLAUDE_CODE_USE_VERTEX=1
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
-ccbox
+ccbox --with-gcloud
 ```
 
-Your gcloud credentials (`~/.config/gcloud`) are mounted read-only.
+The `--with-gcloud` flag mounts your gcloud credentials (`~/.config/gcloud`) read-only.
 
 **AWS Bedrock:**
 
@@ -84,7 +87,7 @@ ccbox
 
 ```bash
 # Shell aliases in ~/.bashrc
-alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox'
+alias ccbox-vertex='CLAUDE_CODE_USE_VERTEX=1 ANTHROPIC_VERTEX_PROJECT_ID="my-project" ccbox --with-gcloud'
 alias ccbox-anthropic='ANTHROPIC_API_KEY="sk-ant-..." ccbox'
 
 # Inline (no persistent state)
@@ -129,6 +132,20 @@ ccbox --github-token "ghp_xxx"     # Use specific token instead of auto-detectin
 - The token is a revocable OAuth token, not your SSH key — revoke anytime in GitHub Settings → Developer settings → Personal access tokens
 - Use fine-grained PATs for minimal scope
 - For extra security, combine with `--with-firewall`
+
+## Credentials
+
+By default, the host credential file is **not** mounted into the container, so no OAuth session or credential file is shared from the host. API-key auth needs nothing extra: provider keys are forwarded from the host environment automatically (`ANTHROPIC_*` for ccbox, `OPENCODE_*` plus common provider keys for ocbox, `QWEN_*`/`OPENAI_*` and others for qcbox).
+
+To share the harness's credential file (API key or OAuth session, shared across projects), pass `--with-credentials` to any launcher:
+
+```bash
+ccbox --with-credentials   # mount ~/.claude/.credentials.json (API key or OAuth)
+ocbox --with-credentials   # mount ~/.local/share/opencode/auth.json (provider credentials)
+qcbox --with-credentials   # mount ~/.qwen/oauth_creds.json (Qwen OAuth)
+```
+
+The file is mounted read-write, created (empty) on the host if it does not exist yet. Without the flag, the container uses its own empty credential file — so `claude /login` (ccbox), `opencode auth login` (ocbox), or the `/auth` flow (qcbox) inside the container does not persist to the host.
 
 ## Firewall
 
@@ -191,7 +208,7 @@ If browser detection fails, pass the config file explicitly in your project's MC
     "command": "npx",
     "args": [
       "@playwright/mcp@latest",
-      "--config", "/home/claude/.playwright-mcp-config.json"
+      "--config", "/home/coder/.playwright-mcp-config.json"
     ]
   }
 }

@@ -3,7 +3,8 @@
 # Launches a containerized Claude Code environment with the current directory mounted
 #
 # Harness-specific wrapper around lib/box-common.sh: defines the Claude Code
-# image, mounts, env passthrough, and Claude-only flags (teams, tmux, safe mode).
+# image, mounts, env passthrough, and Claude-only flags (teams, tmux, safe
+# mode, opt-in credentials mount).
 
 set -e
 
@@ -46,6 +47,7 @@ ENV_PASSTHROUGH_VARS=(
 WITH_TEAMS=false
 WITH_TMUX=false
 SAFE_MODE=false
+WITH_CREDENTIALS=false
 
 harness_parse_arg() {
     case $1 in
@@ -61,6 +63,10 @@ harness_parse_arg() {
             SAFE_MODE=true
             ARG_SHIFT=1
             ;;
+        --with-credentials)
+            WITH_CREDENTIALS=true
+            ARG_SHIFT=1
+            ;;
         *)
             return 1
             ;;
@@ -71,6 +77,7 @@ harness_extra_help() {
     echo "  --with-teams             Enable agent teams (experimental)"
     echo "  --with-tmux              Run claude inside tmux (for split-pane agent teams)"
     echo "  --safe-mode              Start with all customizations disabled"
+    echo "  --with-credentials       Mount ~/.claude/.credentials.json read-write (API key or OAuth)"
 }
 
 # Ensure global config files and directories exist
@@ -83,10 +90,15 @@ harness_ensure_config() {
         mkdir -p "$config_dir"
     fi
 
-    # Settings and credentials
+    # Settings (credentials are opt-in via --with-credentials and not created here)
     [[ -f "${config_dir}/settings.json" ]] || echo '{}' > "${config_dir}/settings.json"
     [[ -f "${config_dir}/settings.local.json" ]] || echo '{}' > "${config_dir}/settings.local.json"
-    [[ -f "${config_dir}/.credentials.json" ]] || echo '{}' > "${config_dir}/.credentials.json"
+    if $WITH_CREDENTIALS; then
+        if [[ ! -f "${config_dir}/.credentials.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${config_dir}/.credentials.json"
+            echo '{}' > "${config_dir}/.credentials.json"
+        fi
+    fi
     [[ -f "${config_dir}/keybindings.json" ]] || echo '{"bindings":[]}' > "${config_dir}/keybindings.json"
     # Global memory file (empty is fine)
     [[ -f "${config_dir}/CLAUDE.md" ]] || touch "${config_dir}/CLAUDE.md"
@@ -118,7 +130,11 @@ harness_setup_project() {
     if [[ ! -f "${PROJECT_DATA_DIR}/.migrated" && -f "${CLAUDE_CONFIG_DIR}/history.jsonl" ]]; then
         log_info "First run with project isolation for this workspace."
         if [[ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]]; then
-            log_info "Credentials will be shared across all projects."
+            if $WITH_CREDENTIALS; then
+                log_info "Credentials will be shared across all projects."
+            else
+                log_info "Credentials are not shared by default; use --with-credentials to mount ~/.claude/.credentials.json."
+            fi
         fi
         touch "${PROJECT_DATA_DIR}/.migrated"
         log_info "Project-specific data stored in: ${PROJECT_DATA_DIR}"
@@ -128,60 +144,66 @@ harness_setup_project() {
 harness_mounts() {
     PODMAN_ARGS+=(
         # Global settings (shared across all projects)
-        -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/claude/.claude/settings.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/claude/.claude/settings.local.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/.credentials.json:/home/claude/.claude/.credentials.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/claude/.claude/keybindings.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/claude/.claude/CLAUDE.md$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/statsig:/home/claude/.claude/statsig$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/hooks:/home/claude/.claude/hooks$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/commands:/home/claude/.claude/commands$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/skills:/home/claude/.claude/skills$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/agents:/home/claude/.claude/agents$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/rules:/home/claude/.claude/rules$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/themes:/home/claude/.claude/themes$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/coder/.claude/settings.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/coder/.claude/settings.local.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/coder/.claude/keybindings.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/coder/.claude/CLAUDE.md$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/statsig:/home/coder/.claude/statsig$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/hooks:/home/coder/.claude/hooks$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/commands:/home/coder/.claude/commands$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/skills:/home/coder/.claude/skills$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/agents:/home/coder/.claude/agents$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/rules:/home/coder/.claude/rules$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/themes:/home/coder/.claude/themes$(vol_flag "")"
         # Additional global directories for core features
-        -v "${CLAUDE_CONFIG_DIR}/file-history:/home/claude/.claude/file-history$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/claude/.claude/paste-cache$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/cache:/home/claude/.claude/cache$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/backups:/home/claude/.claude/backups$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/claude/.claude/stats-cache.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/workflows:/home/claude/.claude/workflows$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/file-history:/home/coder/.claude/file-history$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/coder/.claude/paste-cache$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/cache:/home/coder/.claude/cache$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/backups:/home/coder/.claude/backups$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/coder/.claude/stats-cache.json$(vol_flag "")"
+        -v "${CLAUDE_CONFIG_DIR}/workflows:/home/coder/.claude/workflows$(vol_flag "")"
         # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
         # stores a PID, which is meaningless across PID namespaces (host vs container,
         # or container vs container). Each container uses its own ephemeral copy
         # pre-created in the image, so daemons never clobber each other.
         # Project-specific data (isolated per project)
-        -v "${PROJECT_DATA_DIR}/history.jsonl:/home/claude/.claude/history.jsonl$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/projects:/home/claude/.claude/projects$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/todos:/home/claude/.claude/todos$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/plans:/home/claude/.claude/plans$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/tasks:/home/claude/.claude/tasks$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/teams:/home/claude/.claude/teams$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/plugins:/home/claude/.claude/plugins$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/history.jsonl:/home/coder/.claude/history.jsonl$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/projects:/home/coder/.claude/projects$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/todos:/home/coder/.claude/todos$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/plans:/home/coder/.claude/plans$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/tasks:/home/coder/.claude/tasks$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/teams:/home/coder/.claude/teams$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/plugins:/home/coder/.claude/plugins$(vol_flag "")"
         # Additional project-scoped directories for shell/session features
-        -v "${PROJECT_DATA_DIR}/shell-snapshots:/home/claude/.claude/shell-snapshots$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/session-env:/home/claude/.claude/session-env$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/logs:/home/claude/.claude/logs$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/debug:/home/claude/.claude/debug$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/shell-snapshots:/home/coder/.claude/shell-snapshots$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/session-env:/home/coder/.claude/session-env$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/logs:/home/coder/.claude/logs$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/debug:/home/coder/.claude/debug$(vol_flag "")"
         # Other config files
-        -v "${HOME}/.claude.json:/home/claude/.claude.json$(vol_flag "")"
+        -v "${HOME}/.claude.json:/home/coder/.claude.json$(vol_flag "")"
     )
 
     # Add status line script if it exists
     if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
-        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/claude/.claude/status-line.sh$(vol_flag "ro")")
+        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/coder/.claude/status-line.sh$(vol_flag "ro")")
     fi
 
     # Add user's global RULES.md file if it exists (read-only)
     if [[ -f "${CLAUDE_CONFIG_DIR}/RULES.md" ]]; then
-        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/claude/.claude/RULES.md$(vol_flag "ro")")
+        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/coder/.claude/RULES.md$(vol_flag "ro")")
     fi
 
     # Enterprise managed settings (read-only)
     if [[ -d /etc/claude-code ]]; then
         PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
     fi
+
+    # Anthropic credentials (opt-in via --with-credentials, read-write).
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # no_status: harness_log_status prints the "Credentials:" line itself, in
+    # its original position (before the GitHub summary block).
+    add_optional_mount WITH_CREDENTIALS "${CLAUDE_CONFIG_DIR}/.credentials.json" "/home/coder/.claude/.credentials.json" "" force_mount "Credentials" " (shared across projects)" no_status
 }
 
 harness_pre_run() {
@@ -203,7 +225,7 @@ harness_pre_run() {
         # Start tmux detached, launch a background monitor to auto-close orphaned
         # teammate panes, then attach. The monitor polls every 3s and kills non-lead
         # panes that have dropped back to a bash prompt after claude exits.
-        LAUNCH_CMD="tmux new-session -d -s claude '${LAUNCH_CMD}' && (/home/claude/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t claude"
+        LAUNCH_CMD="tmux new-session -d -s coder '${LAUNCH_CMD}' && (/home/coder/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t coder"
         NEEDS_SHELL=true
         PODMAN_ARGS+=(-e "TERM=xterm-256color")
     fi
@@ -213,6 +235,7 @@ harness_log_status() {
     log_info "Agent teams: $(if $WITH_TEAMS; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Tmux: $(if $WITH_TMUX; then echo 'enabled'; else echo 'disabled'; fi)"
     log_info "Safe mode: $(if $SAFE_MODE; then echo 'enabled'; else echo 'disabled'; fi)"
+    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
 }
 
 # Load the shared engine and run. Two supported layouts:

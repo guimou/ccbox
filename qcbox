@@ -6,7 +6,7 @@
 #
 # Qwen Code state layout (everything under ~/.qwen):
 #   ~/.qwen/settings.json        user settings (shared)
-#   ~/.qwen/oauth_creds.json     Qwen OAuth credentials (shared)
+#   ~/.qwen/oauth_creds.json     Qwen OAuth credentials (shared, opt-in)
 #   ~/.qwen/QWEN.md              global memory file (shared)
 #   ~/.qwen/tmp/<hash>/          per-project shell history, checkpoints
 #   ~/.qwen/file-history/        file backups
@@ -14,7 +14,8 @@
 # Because every project is mounted at /workspace inside the container, Qwen's
 # internal project hash is identical for all projects; tmp/ and file-history/
 # are therefore isolated per project on the host (~/.qwen/qcbox-projects/)
-# while settings, credentials and global memory are shared.
+# while settings and global memory are shared. oauth_creds.json (credentials)
+# is only shared when launched with --with-credentials (opt-in), mirroring ccbox.
 
 set -e
 
@@ -37,11 +38,30 @@ REGISTRY_IMAGE="guimou/qcbox"
 VERSION_FLAG="--qwen-version"
 VERSION_FILE="QWENCODE_VERSION"
 
+# Harness-specific flags
+WITH_CREDENTIALS=false
+
 # Env vars forwarded from the host (Qwen config + OpenAI-compatible provider keys)
 ENV_PASSTHROUGH_REGEX='^(QWEN_|OPENAI_|DASHSCOPE_|BAILIAN_|MODELSCOPE_|OPENROUTER_|ANTHROPIC_|GEMINI_|GOOGLE_)'
 ENV_PASSTHROUGH_VARS=(
     NODE_OPTIONS NO_COLOR FORCE_COLOR NODE_EXTRA_CA_CERTS
 )
+
+harness_parse_arg() {
+    case $1 in
+        --with-credentials)
+            WITH_CREDENTIALS=true
+            ARG_SHIFT=1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+harness_extra_help() {
+    echo "  --with-credentials       Mount ~/.qwen/oauth_creds.json read-write (Qwen OAuth credentials)"
+}
 
 # Ensure global config files and directories exist
 harness_ensure_config() {
@@ -50,8 +70,15 @@ harness_ensure_config() {
     mkdir -p "$QWEN_CONFIG_DIR"
 
     [[ -f "${QWEN_CONFIG_DIR}/settings.json" ]] || echo '{}' > "${QWEN_CONFIG_DIR}/settings.json"
-    # Credentials store, shared across all projects (written by the /auth flow)
-    [[ -f "${QWEN_CONFIG_DIR}/oauth_creds.json" ]] || echo '{}' > "${QWEN_CONFIG_DIR}/oauth_creds.json"
+    # Credentials store, shared across all projects (written by the /auth flow).
+    # Opt-in via --with-credentials; the image ships an empty one so Qwen Code
+    # always finds oauth_creds.json inside the container.
+    if $WITH_CREDENTIALS; then
+        if [[ ! -f "${QWEN_CONFIG_DIR}/oauth_creds.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${QWEN_CONFIG_DIR}/oauth_creds.json"
+            echo '{}' > "${QWEN_CONFIG_DIR}/oauth_creds.json"
+        fi
+    fi
     # Global memory file (empty is fine)
     [[ -f "${QWEN_CONFIG_DIR}/QWEN.md" ]] || touch "${QWEN_CONFIG_DIR}/QWEN.md"
 }
@@ -64,19 +91,29 @@ harness_setup_project() {
 
 harness_mounts() {
     PODMAN_ARGS+=(
-        # Global settings, credentials and memory (shared across all projects)
-        -v "${QWEN_CONFIG_DIR}/settings.json:/home/claude/.qwen/settings.json$(vol_flag "")"
-        -v "${QWEN_CONFIG_DIR}/oauth_creds.json:/home/claude/.qwen/oauth_creds.json$(vol_flag "")"
-        -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/claude/.qwen/QWEN.md$(vol_flag "")"
+        # Global settings and memory (shared across all projects)
+        -v "${QWEN_CONFIG_DIR}/settings.json:/home/coder/.qwen/settings.json$(vol_flag "")"
+        -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/coder/.qwen/QWEN.md$(vol_flag "")"
         # Project-specific state (isolated per project)
-        -v "${PROJECT_DATA_DIR}/tmp:/home/claude/.qwen/tmp$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/file-history:/home/claude/.qwen/file-history$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/tmp:/home/coder/.qwen/tmp$(vol_flag "")"
+        -v "${PROJECT_DATA_DIR}/file-history:/home/coder/.qwen/file-history$(vol_flag "")"
     )
+
+    # Qwen OAuth credentials (opt-in via --with-credentials, read-write).
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # no_status: harness_log_status prints the "Credentials:" line itself, in
+    # its original position (before the GitHub summary block).
+    add_optional_mount WITH_CREDENTIALS "${QWEN_CONFIG_DIR}/oauth_creds.json" "/home/coder/.qwen/oauth_creds.json" "" force_mount "Credentials" " (shared across projects)" no_status
 
     # Home-level env file if the user maintains one (read-only)
     if [[ -f "${QWEN_CONFIG_DIR}/.env" ]]; then
-        PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/.env:/home/claude/.qwen/.env$(vol_flag "ro")")
+        PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/.env:/home/coder/.qwen/.env$(vol_flag "ro")")
     fi
+}
+
+harness_log_status() {
+    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
 }
 
 # Load the shared engine and run. Two supported layouts:
