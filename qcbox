@@ -74,7 +74,10 @@ harness_ensure_config() {
     # Opt-in via --with-credentials; the image ships an empty one so Qwen Code
     # always finds oauth_creds.json inside the container.
     if $WITH_CREDENTIALS; then
-        [[ -f "${QWEN_CONFIG_DIR}/oauth_creds.json" ]] || echo '{}' > "${QWEN_CONFIG_DIR}/oauth_creds.json"
+        if [[ ! -f "${QWEN_CONFIG_DIR}/oauth_creds.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${QWEN_CONFIG_DIR}/oauth_creds.json"
+            echo '{}' > "${QWEN_CONFIG_DIR}/oauth_creds.json"
+        fi
     fi
     # Global memory file (empty is fine)
     [[ -f "${QWEN_CONFIG_DIR}/QWEN.md" ]] || touch "${QWEN_CONFIG_DIR}/QWEN.md"
@@ -96,15 +99,12 @@ harness_mounts() {
         -v "${PROJECT_DATA_DIR}/file-history:/home/coder/.qwen/file-history$(vol_flag "")"
     )
 
-    # Qwen OAuth credentials (opt-in via --with-credentials, read-write)
-    if $WITH_CREDENTIALS; then
-        if [[ -f "${QWEN_CONFIG_DIR}/oauth_creds.json" ]]; then
-            PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/oauth_creds.json:/home/coder/.qwen/oauth_creds.json$(vol_flag "")")
-        else
-            log_warn "${QWEN_CONFIG_DIR}/oauth_creds.json not found on host, --with-credentials ignored"
-            WITH_CREDENTIALS=false
-        fi
-    fi
+    # Qwen OAuth credentials (opt-in via --with-credentials, read-write).
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # no_status: harness_log_status prints the "Credentials:" line itself, in
+    # its original position (before the GitHub summary block).
+    add_optional_mount WITH_CREDENTIALS "${QWEN_CONFIG_DIR}/oauth_creds.json" "/home/coder/.qwen/oauth_creds.json" "" force_mount "Credentials" " (shared across projects)" no_status
 
     # Home-level env file if the user maintains one (read-only)
     if [[ -f "${QWEN_CONFIG_DIR}/.env" ]]; then

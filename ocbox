@@ -75,7 +75,10 @@ harness_ensure_config() {
     # Opt-in via --with-credentials; the image ships an empty one so OpenCode
     # always finds auth.json inside the container.
     if $WITH_CREDENTIALS; then
-        [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]] || echo '{}' > "${OPENCODE_DATA_DIR}/auth.json"
+        if [[ ! -f "${OPENCODE_DATA_DIR}/auth.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${OPENCODE_DATA_DIR}/auth.json"
+            echo '{}' > "${OPENCODE_DATA_DIR}/auth.json"
+        fi
     fi
 }
 
@@ -95,16 +98,13 @@ harness_mounts() {
         -v "${OPENCODE_CACHE_DIR}:/home/coder/.cache/opencode$(vol_flag "")"
     )
 
-    # Provider credentials (opt-in via --with-credentials, read-write)
-    if $WITH_CREDENTIALS; then
-        if [[ -f "${OPENCODE_DATA_DIR}/auth.json" ]]; then
-            # Mounted over the per-project data dir so credentials stay shared
-            PODMAN_ARGS+=(-v "${OPENCODE_DATA_DIR}/auth.json:/home/coder/.local/share/opencode/auth.json$(vol_flag "")")
-        else
-            log_warn "${OPENCODE_DATA_DIR}/auth.json not found on host, --with-credentials ignored"
-            WITH_CREDENTIALS=false
-        fi
-    fi
+    # Provider credentials (opt-in via --with-credentials, read-write).
+    # Mounted over the per-project data dir so credentials stay shared.
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # no_status: harness_log_status prints the "Credentials:" line itself, in
+    # its original position (before the GitHub summary block).
+    add_optional_mount WITH_CREDENTIALS "${OPENCODE_DATA_DIR}/auth.json" "/home/coder/.local/share/opencode/auth.json" "" force_mount "Credentials" " (shared across projects)" no_status
 }
 
 harness_log_status() {
