@@ -78,9 +78,9 @@ ccbox -- --version        # Pass arguments to the harness CLI
 ccbox --help              # All options
 ```
 
-API keys and provider settings are forwarded from host environment variables (e.g. `ANTHROPIC_API_KEY`, Vertex AI, Bedrock) — see the [usage guide](docs/usage.md#api-provider-configuration).
+API keys and provider settings are forwarded from host environment variables (e.g. `ANTHROPIC_API_KEY`, Vertex AI, Bedrock) — see the [usage guide](docs/usage.md#api-provider-configuration) for exactly what is passed per launcher.
 
-> **Breaking change:** host credential files are no longer mounted by default. Pass `--with-gcloud` to mount `~/.config/gcloud` (e.g. for Vertex AI), `--with-gitconfig` to mount `~/.gitconfig`, and `--with-credentials` to mount the harness credential file — `~/.claude/.credentials.json` (ccbox), `~/.local/share/opencode/auth.json` (ocbox), `~/.qwen/oauth_creds.json` (qcbox). GitHub token injection (`GH_TOKEN`) is unaffected.
+> **Breaking change:** host credential *store* files are no longer mounted by default. Pass `--with-gcloud` to mount `~/.config/gcloud` (e.g. for Vertex AI), `--with-gitconfig` to mount `~/.gitconfig`, and `--with-credentials` to mount the harness credential store file — `~/.claude/.credentials.json` (ccbox), `~/.local/share/opencode/auth.json` (ocbox), `~/.qwen/oauth_creds.json` (qcbox). Note this does **not** cover the always-mounted main config (`~/.claude/settings.json`, `~/.config/opencode/opencode.json`, `~/.qwen/settings.json`): any key stored in those is passed regardless of `--with-credentials`. GitHub token injection (`GH_TOKEN`) is unaffected.
 
 ## Documentation
 
