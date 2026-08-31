@@ -8,14 +8,17 @@
 #   ~/.qwen/settings.json        user settings (shared)
 #   ~/.qwen/oauth_creds.json     Qwen OAuth credentials (shared, opt-in)
 #   ~/.qwen/QWEN.md              global memory file (shared)
+#   ~/.qwen/projects/<key>/      per-project chat transcripts (session resume)
 #   ~/.qwen/tmp/<hash>/          per-project shell history, checkpoints
 #   ~/.qwen/file-history/        file backups
 #
 # Because every project is mounted at /workspace inside the container, Qwen's
-# internal project hash is identical for all projects; tmp/ and file-history/
-# are therefore isolated per project on the host (~/.qwen/qcbox-projects/)
-# while settings and global memory are shared. oauth_creds.json (credentials)
-# is only shared when launched with --with-credentials (opt-in), mirroring ccbox.
+# internal project key is identical for all projects; projects/, tmp/ and
+# file-history/ are therefore isolated per project on the host
+# (~/.qwen/qcbox-projects/) while settings and global memory are shared.
+# Mounting projects/ is what makes `qwen --resume` work across containers.
+# oauth_creds.json (credentials) is only shared when launched with
+# --with-credentials (opt-in), mirroring ccbox.
 
 set -e
 
@@ -86,7 +89,7 @@ harness_ensure_config() {
 # Setup project-specific data dirs under ~/.qwen/qcbox-projects/
 harness_setup_project() {
     PROJECT_DATA_DIR="${QWEN_CONFIG_DIR}/qcbox-projects/${PROJECT_KEY}"
-    mkdir -p "${PROJECT_DATA_DIR}/tmp" "${PROJECT_DATA_DIR}/file-history"
+    mkdir -p "${PROJECT_DATA_DIR}/projects" "${PROJECT_DATA_DIR}/tmp" "${PROJECT_DATA_DIR}/file-history"
 }
 
 harness_mounts() {
@@ -95,6 +98,7 @@ harness_mounts() {
         -v "${QWEN_CONFIG_DIR}/settings.json:/home/coder/.qwen/settings.json$(vol_flag "")"
         -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/coder/.qwen/QWEN.md$(vol_flag "")"
         # Project-specific state (isolated per project)
+        -v "${PROJECT_DATA_DIR}/projects:/home/coder/.qwen/projects$(vol_flag "")"
         -v "${PROJECT_DATA_DIR}/tmp:/home/coder/.qwen/tmp$(vol_flag "")"
         -v "${PROJECT_DATA_DIR}/file-history:/home/coder/.qwen/file-history$(vol_flag "")"
     )
