@@ -41,10 +41,10 @@ curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/lib/box-common.sh
 curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/ccbox -o ~/.local/bin/ccbox
 chmod +x ~/.local/bin/ccbox
 # Repeat the last two lines for ocbox / qcbox if desired
-curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/ccbox -o ~/.local/bin/ocbox
+curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/ocbox -o ~/.local/bin/ocbox
 chmod +x ~/.local/bin/ocbox
 # and
-curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/ccbox -o ~/.local/bin/qcbox
+curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/qcbox -o ~/.local/bin/qcbox
 chmod +x ~/.local/bin/qcbox
 ```
 
