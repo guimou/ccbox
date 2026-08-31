@@ -155,6 +155,7 @@ The per-project host directory is mounted as the container's entire OpenCode dat
 | `~/.qwen/settings.json` | User settings | Shared |
 | `~/.qwen/oauth_creds.json` | Qwen OAuth credentials (opt-in, `--with-credentials`) | Shared (rw, not mounted by default) |
 | `~/.qwen/QWEN.md` | Global memory file | Shared |
+| `~/.qwen/qcbox-projects/{name}_{hash}/projects/` | Chat transcripts (session resume) | Per-project |
 | `~/.qwen/qcbox-projects/{name}_{hash}/tmp/` | Shell history, checkpoints | Per-project |
 | `~/.qwen/qcbox-projects/{name}_{hash}/file-history/` | File backups | Per-project |
 

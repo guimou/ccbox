@@ -46,6 +46,7 @@ ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credenti
 
 - Each project directory gets isolated history/session data, keyed by a hash of its path — two projects with the same name in different locations don't collide.
 - You can run **multiple sessions simultaneously** in the same project. Each session gets a unique container name; project data is shared between them.
+- Chat transcripts persist in the per-project data dir, so you can resume past conversations after a container exits: `ccbox -- --resume`, `ocbox -- --continue` (or `-c`), `qcbox -- --resume`.
 - See [architecture.md](architecture.md) for exactly what is mounted, shared, and isolated per harness.
 
 ## API Provider Configuration
