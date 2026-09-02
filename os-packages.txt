@@ -4,6 +4,7 @@
 # Audio
 alsa-plugins-pulseaudio
 pulseaudio-utils
+ffmpeg-free
 
 # Core utilities
 bash-completion
