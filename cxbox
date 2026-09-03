@@ -13,9 +13,15 @@
 # Because every project is mounted at /workspace inside the container, Codex's
 # internal project key is identical for all projects; the per-project state dir is
 # therefore isolated per project on the host (~/.codex/cxbox-projects/). The
-# container's ~/.codex is a per-project dir, with the shared config.toml mounted on
-# top so settings are global. auth.json (credentials) is only shared when launched
-# with --with-credentials (opt-in), mirroring the other launchers.
+# container's ~/.codex is a per-project dir. The shared config.toml is COPIED
+# into it at launch (seeded on first run, refreshed whenever the host file is
+# newer) rather than bind-mounted: Codex persists config edits (project trust,
+# /model, ...) by writing a temp file and renaming it over config.toml, and a
+# rename onto a single-file bind mount fails with EBUSY. Edits made inside the
+# container therefore stay per-project; the host file is the source of truth.
+# auth.json (credentials) is only shared when launched with --with-credentials
+# (opt-in), mirroring the other launchers; Codex rewrites it in place, so a file
+# mount works for it.
 
 set -e
 
@@ -91,15 +97,24 @@ harness_ensure_config() {
 harness_setup_project() {
     PROJECT_DATA_DIR="${HOME}/.codex/cxbox-projects/${PROJECT_KEY}"
     mkdir -p "${PROJECT_DATA_DIR}/data"
+
+    # Seed / refresh the per-project config.toml from the shared one (see the
+    # header comment for why it is copied instead of mounted)
+    local shared_config="${CODEX_CONFIG_DIR}/config.toml"
+    local project_config="${PROJECT_DATA_DIR}/data/config.toml"
+    if [[ ! -f "$project_config" ]]; then
+        cp "$shared_config" "$project_config"
+    elif [[ "$shared_config" -nt "$project_config" ]]; then
+        log_info "Shared config.toml is newer, refreshing the per-project copy (in-container edits are replaced)"
+        cp "$shared_config" "$project_config"
+    fi
 }
 
 harness_mounts() {
     PODMAN_ARGS+=(
         # Per-project state dir mounted as the container's entire Codex home
-        # (sessions, state DB, memories, goals, logs)
+        # (sessions, state DB, memories, goals, logs, and the config.toml copy)
         -v "${PROJECT_DATA_DIR}/data:/home/coder/.codex$(vol_flag "")"
-        # Global config shared across all projects (mounted on top of the data dir)
-        -v "${CODEX_CONFIG_DIR}/config.toml:/home/coder/.codex/config.toml$(vol_flag "")"
     )
 
     # Credentials (opt-in via --with-credentials, read-write).
@@ -116,7 +131,7 @@ harness_pre_run() {
     # bubblewrap, or Landlock in legacy mode) cannot nest inside a rootless
     # Podman container, so disable it. Also skip the startup update check
     # (the image pins the version). Codex has no system-level config file and
-    # the host config.toml is mounted over the image, so pass -c overrides.
+    # config.toml is a per-project copy of the host file, so pass -c overrides.
     EXTRA_ARGS=(-c 'sandbox_mode="danger-full-access"' -c 'check_for_update_on_startup=false' "${EXTRA_ARGS[@]}")
     # Rebuild the shell form (used with --with-firewall), quoting each arg so
     # the TOML string quotes survive `bash -c`.
