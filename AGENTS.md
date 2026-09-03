@@ -1,24 +1,25 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents (Claude Code, OpenCode, Qwen Code) when working with code in this repository.
+This file provides guidance to AI coding agents (Claude Code, OpenCode, Qwen Code, Codex CLI) when working with code in this repository.
 
 ## Project Overview
 
 Containerized AI coding harness development environments for Fedora. Runs in Podman rootless mode with SELinux support and optional network firewall restrictions.
 
-One repo produces three images/launchers from a shared Dockerfile and launcher engine:
+One repo produces four images/launchers from a shared base image, a harness Dockerfile and a launcher engine:
 
 | Launcher | Harness | Image | Version pin file | Firewall overlay |
 |----------|---------|-------|------------------|------------------|
 | `ccbox` | Claude Code | `quay.io/guimou/ccbox` | `CLAUDE_VERSION` | `firewall-domains-claude.txt` |
 | `ocbox` | OpenCode | `quay.io/guimou/ocbox` | `OPENCODE_VERSION` | `firewall-domains-opencode.txt` |
 | `qcbox` | Qwen Code | `quay.io/guimou/qcbox` | `QWENCODE_VERSION` | `firewall-domains-qwencode.txt` |
+| `cxbox` | Codex CLI | `quay.io/guimou/cxbox` | `CODEX_VERSION` | `firewall-domains-codex.txt` |
 
-The Dockerfile selects the harness via the `HARNESS` build arg (`claude` / `opencode` / `qwencode`) and its version via `HARNESS_VERSION`. Common layers never reference `HARNESS` so the build cache is shared across the three images.
+The image is built in two stages. `Dockerfile.base` holds everything harness-independent (Fedora, OS packages, runtimes, tools) and is published once as `quay.io/guimou/codebox-base`, tagged by the content of its inputs (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`). `Dockerfile` starts `FROM ${BASE_IMAGE}` and only adds the harness, selected via the `HARNESS` build arg (`claude` / `opencode` / `qwencode` / `codex`) and its version via `HARNESS_VERSION`. Each harness build is therefore small and independent of the others.
 
 ## Run
 
-By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox`/`qcbox`).
+By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox`/`qcbox`/`cxbox`).
 
 ```bash
 # Launch with latest image from registry
@@ -48,6 +49,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox
 # Mount ~/.qwen/oauth_creds.json (Qwen OAuth, shared across projects)
 ./qcbox --with-credentials
 
+# Mount ~/.codex/auth.json (API key or ChatGPT OAuth, shared across projects)
+./cxbox --with-credentials
+
 # Enable agent teams (experimental)
 ./ccbox --with-teams
 
@@ -60,11 +64,13 @@ By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox
 # List active sessions for current project
 ./ccbox --list-sessions
 
-# OpenCode and Qwen Code work the same way (same common flags)
+# OpenCode, Qwen Code and Codex work the same way (same common flags)
 ./ocbox
 ./ocbox --opencode-version <version>
 ./qcbox
 ./qcbox --qwen-version <version>
+./cxbox
+./cxbox --codex-version <version>
 ```
 
 `--with-teams`, `--with-tmux`, and `--safe-mode` are Claude Code specific (ccbox only).
@@ -81,18 +87,24 @@ For local development, you can build the image locally:
 
 # Build specific version locally
 ./ccbox --build --claude-version <version>
+
+# Also rebuild the base image locally (after editing Dockerfile.base / os-packages.txt, or on Apple Silicon)
+./ccbox --build-base
 ```
+
+`--build` builds only the harness layer on top of the base image: a locally built `codebox-base:latest` if one exists, otherwise the published `quay.io/guimou/codebox-base:latest` (on arm64 hosts the base is built natively since the published one is x86_64 only).
 
 ## File Structure
 
-- `Dockerfile` - Container image definition (Fedora 44 base), parameterized by `HARNESS`/`HARNESS_VERSION` build args
+- `Dockerfile.base` - Harness-independent base image (Fedora 44, OS packages, runtimes, tools), published as `quay.io/guimou/codebox-base`
+- `Dockerfile` - Harness image built `FROM ${BASE_IMAGE}`, parameterized by `HARNESS`/`HARNESS_VERSION` build args
 - `os-packages.txt` - DNF packages to install (one per line)
 - `firewall-domains.txt` - Allowed network domains common to all harnesses (one per line)
-- `firewall-domains-{claude,opencode,qwencode}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
+- `firewall-domains-{claude,opencode,qwencode,codex}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
-- `lib/box-common.sh` - Shared launcher engine (sourced by all three launchers)
-- `ccbox` / `ocbox` / `qcbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
-- `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version`)
+- `lib/box-common.sh` - Shared launcher engine (sourced by all four launchers)
+- `ccbox` / `ocbox` / `qcbox` / `cxbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
+- `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version` / `--codex-version`)
 - `docs/` - User-facing documentation: `usage.md`, `architecture.md`, `development.md` (README holds only the minimum and links here — keep them in sync when changing behavior)
 
 ## What's Included
@@ -217,13 +229,14 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
 
 ## CI/CD
 
-- `.github/workflows/release.yml` runs on pushes to main touching image/launcher files. It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (Dockerfile, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness.
-- `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). Images are tagged `{version}`, `latest`, and the commit SHA.
+- `.github/workflows/release.yml` runs on pushes to main touching image/launcher files (plus a weekly schedule and a manual "rebuild all" dispatch). It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (`Dockerfile`, `Dockerfile.base`, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness. If at least one harness needs a build, the base image is built first (once, skipped when its content tag already exists), then each harness builds in its own independent job (`fail-fast: false`).
+- `.github/workflows/build-base.yml` is the reusable base build: it computes the base content tag, skips if that tag exists in `quay.io/guimou/codebox-base` (unless forced), otherwise builds `Dockerfile.base` and pushes `{tag}` and `latest`.
+- `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). It builds `Dockerfile` from the given base tag, pushes the image tagged `{version}`, `latest`, and the commit SHA, and, when given a `git_tag`, creates that git tag and GitHub Release in the same job.
 
 ## Architecture
 
-- **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox` (CI/CD published)
-- **Base**: `quay.io/fedora/fedora:44`
+- **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox` (CI/CD published), built on `quay.io/guimou/codebox-base`
+- **Base**: `quay.io/guimou/codebox-base` (built from `quay.io/fedora/fedora:44`)
 - **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
   - Current directory → `/workspace`
@@ -233,6 +246,7 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
   - `~/.claude/.credentials.json` → `/home/coder/.claude/.credentials.json` (read-write, only with `--with-credentials`)
   - `~/.local/share/opencode/auth.json` → `/home/coder/.local/share/opencode/auth.json` (read-write, only with `ocbox --with-credentials`)
   - `~/.qwen/oauth_creds.json` → `/home/coder/.qwen/oauth_creds.json` (read-write, only with `qcbox --with-credentials`)
+  - `~/.codex/auth.json` → `/home/coder/.codex/auth.json` (read-write, only with `cxbox --with-credentials`)
   - `~/.config/gcloud` → `/home/coder/.config/gcloud` (read-only, only with `--with-gcloud`)
   - `~/.gitconfig` → `/home/coder/.gitconfig` (read-only, only with `--with-gitconfig`)
   - npm global prefix → `/home/coder/.npm-global` (read-only, auto-detected)
@@ -240,10 +254,10 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
   - `/etc/localtime` (for timezone sync)
 - **SELinux**: Uses `:z` volume labels for shared relabeling (supports multi-session)
 - **Firewall**: Optional, requires `NET_ADMIN` and `NET_RAW` capabilities
-- **Project Isolation**: Each project gets its own history and session data (`~/.claude/ccbox-projects/` for ccbox, `~/.local/share/ocbox-projects/` for ocbox, `~/.qwen/qcbox-projects/` for qcbox)
+- **Project Isolation**: Each project gets its own history and session data (`~/.claude/ccbox-projects/` for ccbox, `~/.local/share/ocbox-projects/` for ocbox, `~/.qwen/qcbox-projects/` for qcbox, `~/.codex/cxbox-projects/` for cxbox)
 - **Multi-Session**: Multiple sessions can run simultaneously per project, each with a unique container name (`{box}-{project}-{hash}-{session-id}`)
-- **Per-harness mounts**: the mounts listed above are ccbox's (`.credentials.json` is opt-in via `ccbox --with-credentials`). ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode`, and a shared `~/.cache/opencode`; the shared `auth.json` is opt-in via `ocbox --with-credentials` (mounted on top of the per-project data dir). qcbox mounts shared `~/.qwen/{settings.json,QWEN.md}` plus per-project `projects/` (chat transcripts, enables `qwen --resume`), `tmp/`, and `file-history/` dirs; `oauth_creds.json` is opt-in via `qcbox --with-credentials`. Workspace, credentials (`--with-credentials`, per harness), gcloud (opt-in `--with-gcloud`), gitconfig (opt-in `--with-gitconfig`), clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh` and the harness wrappers).
-- **Credentials / what actually reaches the container**: `--with-credentials` controls **only** the dedicated credential store file. The main config is **always** mounted, so any key stored there (an `"env"` block or a provider `apiKey`/`envKey`) is passed regardless of the flag. Each launcher also forwards host env vars matching its prefix list (see `ENV_PASSTHROUGH_REGEX` in each wrapper): ccbox `ANTHROPIC_*`/`CLAUDE_CODE_*`/`CLAUDE_AX_*`/`CLAUDE_ENABLE_*`/`CLAUDE_AUTOCOMPACT_*`, ocbox `OPENCODE_*`/`ANTHROPIC_*`/`OPENAI_*`/`OPENROUTER_*`/`GEMINI_*`/`GOOGLE_*`/`AZURE_*`/`DEEPSEEK_*`/`MISTRAL_*`/`XAI_*`/`GROQ_*`, qcbox `QWEN_*`/`OPENAI_*`/`DASHSCOPE_*`/`BAILIAN_*`/`MODELSCOPE_*`/`OPENROUTER_*`/`ANTHROPIC_*`/`GEMINI_*`/`GOOGLE_*`, plus specific vars (e.g. `AWS_*`). So a container is only credential-free if *neither* the always-mounted config *nor* a forwarded env var carries a key. Per-project overrides that stay out of the shared home dir: ccbox `.claude/settings{,.local}.json`, ocbox `opencode.json` in the project root, qcbox `.qwen/settings.json` + `.qwen/.env` in the project. Full per-launcher tables live in `docs/usage.md` (API Provider Configuration + Credentials) and `docs/architecture.md` (Per-Harness Mounts).
+- **Per-harness mounts**: the mounts listed above are ccbox's (`.credentials.json` is opt-in via `ccbox --with-credentials`). ocbox mounts `~/.config/opencode` (shared config), a per-project data dir as `~/.local/share/opencode`, and a shared `~/.cache/opencode`; the shared `auth.json` is opt-in via `ocbox --with-credentials` (mounted on top of the per-project data dir). qcbox mounts shared `~/.qwen/{settings.json,QWEN.md}` plus per-project `projects/` (chat transcripts, enables `qwen --resume`), `tmp/`, and `file-history/` dirs; `oauth_creds.json` is opt-in via `qcbox --with-credentials`. cxbox mounts a per-project data dir as the entire `~/.codex` (sessions, state DB, memories, goals) with the shared `config.toml` mounted on top; `auth.json` is opt-in via `cxbox --with-credentials` (mounted on top of the per-project data dir). Workspace, credentials (`--with-credentials`, per harness), gcloud (opt-in `--with-gcloud`), gitconfig (opt-in `--with-gitconfig`), clipboard, audio, timezone, npm-global, and GitHub token mounts are common to all launchers (handled by `lib/box-common.sh` and the harness wrappers).
+- **Credentials / what actually reaches the container**: `--with-credentials` controls **only** the dedicated credential store file. The main config is **always** mounted, so any key stored there (an `"env"` block or a provider `apiKey`/`envKey`) is passed regardless of the flag. Each launcher also forwards host env vars matching its prefix list (see `ENV_PASSTHROUGH_REGEX` in each wrapper): ccbox `ANTHROPIC_*`/`CLAUDE_CODE_*`/`CLAUDE_AX_*`/`CLAUDE_ENABLE_*`/`CLAUDE_AUTOCOMPACT_*`, ocbox `OPENCODE_*`/`ANTHROPIC_*`/`OPENAI_*`/`OPENROUTER_*`/`GEMINI_*`/`GOOGLE_*`/`AZURE_*`/`DEEPSEEK_*`/`MISTRAL_*`/`XAI_*`/`GROQ_*`, qcbox `QWEN_*`/`OPENAI_*`/`DASHSCOPE_*`/`BAILIAN_*`/`MODELSCOPE_*`/`OPENROUTER_*`/`ANTHROPIC_*`/`GEMINI_*`/`GOOGLE_*`, cxbox `CODEX_*`/`OPENAI_*`/`OPENROUTER_*`/`ANTHROPIC_*`/`GEMINI_*`/`GOOGLE_*`/`AZURE_*`/`DEEPSEEK_*`/`MISTRAL_*`/`XAI_*`/`GROQ_*`, plus specific vars (e.g. `AWS_*`). So a container is only credential-free if *neither* the always-mounted config *nor* a forwarded env var carries a key. Per-project overrides that stay out of the shared home dir: ccbox `.claude/settings{,.local}.json`, ocbox `opencode.json` in the project root, qcbox `.qwen/settings.json` + `.qwen/.env` in the project, cxbox `AGENTS.md` in the project root (via the workspace mount). Full per-launcher tables live in `docs/usage.md` (API Provider Configuration + Credentials) and `docs/architecture.md` (Per-Harness Mounts).
 
 ## Clipboard Support
 

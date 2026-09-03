@@ -1,0 +1,107 @@
+name: Build Base Image
+
+# Builds the harness-independent base image (Dockerfile.base) and pushes it to
+# quay.io/guimou/codebox-base. The image is tagged by content: the short SHA of
+# the last commit that touched a base input (Dockerfile.base, os-packages.txt,
+# init-firewall.sh). If that tag already exists in the registry the build is
+# skipped, so the base is built at most once per change and every harness
+# build started from the same commit reuses the exact same base.
+
+on:
+  workflow_call:
+    inputs:
+      force:
+        description: 'Rebuild and overwrite the tag even if it already exists (refresh OS packages)'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      base_tag:
+        description: 'Content tag of the base image that harness builds must use'
+        value: ${{ jobs.build-base.outputs.base_tag }}
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild and overwrite the tag even if it already exists'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: quay.io
+  BASE_IMAGE_NAME: guimou/codebox-base
+
+jobs:
+  build-base:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      base_tag: ${{ steps.tag.outputs.base_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute base content tag
+        id: tag
+        run: |
+          # Short SHA of the last commit touching any base input. Keep this
+          # list in sync with base_inputs in release.yml and box-common.sh.
+          BASE_TAG=$(git log -1 --format=%H -- Dockerfile.base os-packages.txt init-firewall.sh | cut -c1-12)
+          if [ -z "$BASE_TAG" ]; then
+            echo "Could not determine base content tag" >&2
+            exit 1
+          fi
+          echo "base_tag=${BASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Base image: ${REGISTRY}/${BASE_IMAGE_NAME}:${BASE_TAG}"
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Check whether the base tag already exists
+        id: exists
+        run: |
+          REF="${REGISTRY}/${BASE_IMAGE_NAME}:${{ steps.tag.outputs.base_tag }}"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "Forced rebuild requested for ${REF}"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif docker manifest inspect "$REF" >/dev/null 2>&1; then
+            echo "${REF} already exists, skipping base build"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "${REF} not found, building"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image metadata
+        if: steps.exists.outputs.skip != 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.tag.outputs.base_tag }}
+            type=raw,value=latest
+
+      - name: Build and push base image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base

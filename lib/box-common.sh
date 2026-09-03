@@ -1,9 +1,9 @@
 #!/bin/bash
-# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox).
+# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox / cxbox).
 #
 # This file is sourced by the thin per-harness wrappers, which must define
 # the following variables before sourcing:
-#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox)
+#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox, cxbox)
 #   HARNESS_TITLE   - human-readable harness name (e.g. "Claude Code")
 #   HARNESS_CLI     - CLI binary to run inside the container
 #   REGISTRY_IMAGE  - registry repository (e.g. "guimou/ccbox")
@@ -119,6 +119,11 @@ add_optional_mount() {
 REGISTRY="quay.io"
 FULL_REGISTRY_IMAGE="${REGISTRY}/${REGISTRY_IMAGE}"
 LOCAL_IMAGE_NAME="${BOX_NAME}"
+# Harness-independent base image (Dockerfile.base). Local builds start FROM a
+# locally built codebox-base when one exists (or --build-base was given),
+# otherwise from the published one.
+LOCAL_BASE_IMAGE="codebox-base:latest"
+REGISTRY_BASE_IMAGE="quay.io/guimou/codebox-base:latest"
 
 # Generate a unique session identifier
 generate_session_id() {
@@ -256,7 +261,8 @@ show_help() {
     echo "Run ${HARNESS_TITLE} in a container. By default, pulls from ${FULL_REGISTRY_IMAGE}."
     echo ""
     echo "Options:"
-    echo "  --build                  Build image locally (for development)"
+    echo "  --build                  Build image locally (harness layer on top of the base image)"
+    echo "  --build-base             Also build the base image locally from Dockerfile.base (implies --build)"
     echo "  --local                  Use locally-built image instead of pulling"
     printf "  %-24s %s\n" "${VERSION_FLAG} VERSION" "Use specific ${HARNESS_TITLE} version"
     echo "  --with-firewall          Enable network firewall restrictions"
@@ -277,6 +283,7 @@ show_help() {
     echo "  ${BOX_NAME} ${VERSION_FLAG} 1.2.3        # Pull specific version"
     echo "  ${BOX_NAME} --local                      # Use local image"
     echo "  ${BOX_NAME} --build                      # Build locally"
+    echo "  ${BOX_NAME} --build-base                 # Rebuild the base image too (Apple Silicon, base changes)"
     echo "  ${BOX_NAME} --with-firewall              # Run with network restrictions"
     echo "  ${BOX_NAME} --no-github                  # Run without GitHub token"
     echo "  ${BOX_NAME} -- --version                 # Pass args to ${HARNESS_CLI}"
@@ -318,6 +325,43 @@ pull_image() {
     fi
 }
 
+# Build the base image locally (Dockerfile.base -> codebox-base:latest)
+build_base_image() {
+    if [[ ! -f "${SCRIPT_DIR}/Dockerfile.base" ]]; then
+        log_error "No Dockerfile.base found in ${SCRIPT_DIR}"
+        exit 1
+    fi
+    log_info "Building base image: ${LOCAL_BASE_IMAGE}"
+    podman build -f "${SCRIPT_DIR}/Dockerfile.base" -t "$LOCAL_BASE_IMAGE" "$SCRIPT_DIR"
+    log_info "Base image built successfully: ${LOCAL_BASE_IMAGE}"
+}
+
+# Pick the base image for a local harness build; sets BASE_IMAGE_REF
+resolve_base_image() {
+    if $BUILD_BASE; then
+        build_base_image
+        BASE_IMAGE_REF="$LOCAL_BASE_IMAGE"
+        return
+    fi
+    if podman image exists "$LOCAL_BASE_IMAGE"; then
+        log_info "Using local base image: ${LOCAL_BASE_IMAGE} (rebuild with --build-base)"
+        BASE_IMAGE_REF="$LOCAL_BASE_IMAGE"
+        return
+    fi
+    case "$(uname -m)" in
+        arm64|aarch64)
+            # The published base is x86_64 only; build a native one
+            log_info "No local base image and the registry base is x86_64 only, building it natively"
+            build_base_image
+            BASE_IMAGE_REF="$LOCAL_BASE_IMAGE"
+            ;;
+        *)
+            log_info "Using published base image: ${REGISTRY_BASE_IMAGE} (or --build-base to build it locally)"
+            BASE_IMAGE_REF="$REGISTRY_BASE_IMAGE"
+            ;;
+    esac
+}
+
 # Build image locally
 build_image() {
     if [[ ! -f "${SCRIPT_DIR}/Dockerfile" ]]; then
@@ -327,12 +371,15 @@ build_image() {
         exit 1
     fi
 
+    resolve_base_image
+    local base_image="$BASE_IMAGE_REF"
+
     local tag
     tag=$(determine_image_tag)
     local full_tag="${LOCAL_IMAGE_NAME}:${tag}"
 
-    log_info "Building container image: $full_tag"
-    BUILD_ARGS=(--build-arg "HARNESS=${HARNESS}")
+    log_info "Building container image: $full_tag (from ${base_image})"
+    BUILD_ARGS=(--build-arg "BASE_IMAGE=${base_image}" --build-arg "HARNESS=${HARNESS}")
 
     if [[ "$tag" != "latest" ]]; then
         log_info "Using ${HARNESS_TITLE} version: $tag"
@@ -341,7 +388,7 @@ build_image() {
         log_info "Using latest ${HARNESS_TITLE} version"
     fi
 
-    podman build "${BUILD_ARGS[@]}" -t "$full_tag" "$SCRIPT_DIR"
+    podman build "${BUILD_ARGS[@]}" -f "${SCRIPT_DIR}/Dockerfile" -t "$full_tag" "$SCRIPT_DIR"
 
     # Also tag as latest for convenience
     if [[ "$tag" != "latest" ]]; then
@@ -354,6 +401,7 @@ build_image() {
 box_main() {
     # Parse arguments
     BUILD_ONLY=false
+    BUILD_BASE=false
     USE_LOCAL=false
     NO_FIREWALL=true
     NO_CLIPBOARD=false
@@ -379,6 +427,11 @@ box_main() {
         case $1 in
             --build)
                 BUILD_ONLY=true
+                shift
+                ;;
+            --build-base)
+                BUILD_ONLY=true
+                BUILD_BASE=true
                 shift
                 ;;
             --local)

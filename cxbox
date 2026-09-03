@@ -1,0 +1,145 @@
+#!/bin/bash
+# Codex CLI Development Container Launch Script
+# Launches a containerized Codex CLI environment with the current directory mounted
+#
+# Harness-specific wrapper around lib/box-common.sh.
+#
+# Codex state layout (everything under CODEX_HOME, default ~/.codex):
+#   ~/.codex/config.toml           global config (shared across all projects)
+#   ~/.codex/auth.json             credentials (API key or ChatGPT OAuth, opt-in)
+#   ~/.codex/<everything else>     per-project state: sessions/rollouts, state DB,
+#                                  memories, goals, logs (keyed by project path)
+#
+# Because every project is mounted at /workspace inside the container, Codex's
+# internal project key is identical for all projects; the per-project state dir is
+# therefore isolated per project on the host (~/.codex/cxbox-projects/). The
+# container's ~/.codex is a per-project dir, with the shared config.toml mounted on
+# top so settings are global. auth.json (credentials) is only shared when launched
+# with --with-credentials (opt-in), mirroring the other launchers.
+
+set -e
+
+# Resolve the real script location (follows symlinks, e.g. ~/.local/bin/cxbox)
+WRAPPER_SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "$WRAPPER_SOURCE" ]]; do
+    WRAPPER_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+    WRAPPER_SOURCE="$(readlink "$WRAPPER_SOURCE")"
+    [[ "$WRAPPER_SOURCE" != /* ]] && WRAPPER_SOURCE="${WRAPPER_DIR}/${WRAPPER_SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$WRAPPER_SOURCE")" && pwd)"
+WRAPPER_PATH="${SCRIPT_DIR}/$(basename "$WRAPPER_SOURCE")"
+
+# Harness identity
+BOX_NAME="cxbox"
+HARNESS="codex"
+HARNESS_TITLE="Codex CLI"
+HARNESS_CLI="codex"
+REGISTRY_IMAGE="guimou/cxbox"
+VERSION_FLAG="--codex-version"
+VERSION_FILE="CODEX_VERSION"
+
+# Harness-specific flags
+WITH_CREDENTIALS=false
+
+# Env vars forwarded from the host (Codex config + common provider keys).
+# CODEX_HOME is deliberately NOT forwarded: inside the container Codex must use
+# /home/coder/.codex (the mount target), whatever the host value is.
+ENV_PASSTHROUGH_REGEX='^(CODEX_|OPENAI_|OPENROUTER_|ANTHROPIC_|GEMINI_|GOOGLE_|AZURE_|DEEPSEEK_|MISTRAL_|XAI_|GROQ_)'
+ENV_PASSTHROUGH_VARS=(
+    AWS_REGION AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
+    NODE_OPTIONS NO_COLOR FORCE_COLOR
+)
+
+harness_parse_arg() {
+    case $1 in
+        --with-credentials)
+            WITH_CREDENTIALS=true
+            ARG_SHIFT=1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+harness_extra_help() {
+    echo "  --with-credentials       Mount ~/.codex/auth.json read-write (API key or ChatGPT OAuth)"
+}
+
+# Ensure global config files and directories exist
+harness_ensure_config() {
+    CODEX_CONFIG_DIR="${HOME}/.codex"
+
+    mkdir -p "$CODEX_CONFIG_DIR"
+
+    # Global config (empty file is valid TOML)
+    [[ -f "${CODEX_CONFIG_DIR}/config.toml" ]] || echo '' > "${CODEX_CONFIG_DIR}/config.toml"
+    # Credentials store, shared across all projects (written by `codex login`
+    # or the API-key flow). Opt-in via --with-credentials; without the flag the
+    # container's ~/.codex is the per-project data dir, so any `codex login`
+    # done inside stays per-project and never reaches this host file.
+    if $WITH_CREDENTIALS; then
+        if [[ ! -f "${CODEX_CONFIG_DIR}/auth.json" ]]; then
+            log_info "No existing credentials found, starting fresh: ${CODEX_CONFIG_DIR}/auth.json"
+            echo '{}' > "${CODEX_CONFIG_DIR}/auth.json"
+        fi
+    fi
+}
+
+# Setup project-specific data dir under ~/.codex/cxbox-projects/
+harness_setup_project() {
+    PROJECT_DATA_DIR="${HOME}/.codex/cxbox-projects/${PROJECT_KEY}"
+    mkdir -p "${PROJECT_DATA_DIR}/data"
+}
+
+harness_mounts() {
+    PODMAN_ARGS+=(
+        # Per-project state dir mounted as the container's entire Codex home
+        # (sessions, state DB, memories, goals, logs)
+        -v "${PROJECT_DATA_DIR}/data:/home/coder/.codex$(vol_flag "")"
+        # Global config shared across all projects (mounted on top of the data dir)
+        -v "${CODEX_CONFIG_DIR}/config.toml:/home/coder/.codex/config.toml$(vol_flag "")"
+    )
+
+    # Credentials (opt-in via --with-credentials, read-write).
+    # Mounted over the per-project data dir so credentials stay shared.
+    # harness_ensure_config already created an empty file when missing, so it
+    # always exists here (force_mount) and no "file missing" branch is needed.
+    # no_status: harness_log_status prints the "Credentials:" line itself, in
+    # its original position (before the GitHub summary block).
+    add_optional_mount WITH_CREDENTIALS "${CODEX_CONFIG_DIR}/auth.json" "/home/coder/.codex/auth.json" "" force_mount "Credentials" " (shared across projects)" no_status
+}
+
+harness_pre_run() {
+    # The container is already the sandbox: Codex's own Linux sandbox (bundled
+    # bubblewrap, or Landlock in legacy mode) cannot nest inside a rootless
+    # Podman container, so disable it. Also skip the startup update check
+    # (the image pins the version). Codex has no system-level config file and
+    # the host config.toml is mounted over the image, so pass -c overrides.
+    EXTRA_ARGS=(-c 'sandbox_mode="danger-full-access"' -c 'check_for_update_on_startup=false' "${EXTRA_ARGS[@]}")
+    # Rebuild the shell form (used with --with-firewall), quoting each arg so
+    # the TOML string quotes survive `bash -c`.
+    LAUNCH_CMD="${HARNESS_CLI}$(printf ' %q' "${EXTRA_ARGS[@]}")"
+}
+
+harness_log_status() {
+    log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
+}
+
+# Load the shared engine and run. Two supported layouts:
+#   - repo clone:     lib/box-common.sh next to the launcher
+#   - flat install:   box-common.sh next to the launcher (e.g. ~/.local/bin)
+if [[ -f "${SCRIPT_DIR}/lib/box-common.sh" ]]; then
+    # shellcheck source=lib/box-common.sh
+    source "${SCRIPT_DIR}/lib/box-common.sh"
+elif [[ -f "${SCRIPT_DIR}/box-common.sh" ]]; then
+    # shellcheck source=lib/box-common.sh
+    source "${SCRIPT_DIR}/box-common.sh"
+else
+    echo "[ERROR] Shared engine box-common.sh not found in ${SCRIPT_DIR}" >&2
+    echo "Download it next to the launcher:" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/guimou/ccbox/main/lib/box-common.sh -o ${SCRIPT_DIR}/box-common.sh" >&2
+    exit 1
+fi
+box_main "$@"

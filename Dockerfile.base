@@ -1,0 +1,133 @@
+# Containerized AI coding harness development environment - BASE image
+# Based on Fedora 44
+#
+# This is the harness-independent part of the image: OS packages, language
+# runtimes, dev tools, Rust toolchain, firewall script, user setup and
+# environment. It is built once and published as quay.io/guimou/codebox-base;
+# the per-harness Dockerfile starts FROM it and only adds the harness CLI.
+#
+# Nothing in this file may reference a harness: base rebuilds are triggered
+# only by changes to Dockerfile.base, os-packages.txt and init-firewall.sh.
+
+FROM quay.io/fedora/fedora:44
+
+LABEL maintainer="guimou"
+LABEL description="Containerized AI coding harness development environment"
+
+# Set timezone (can be overridden at build time)
+ARG TZ=UTC
+ENV TZ=${TZ}
+
+# Copy package list and install OS packages
+COPY os-packages.txt /tmp/os-packages.txt
+RUN dnf upgrade -y && \
+    # Filter out comments and empty lines, then install packages
+    grep -v '^#' /tmp/os-packages.txt | grep -v '^$' | xargs dnf install -y && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf /tmp/os-packages.txt
+
+# Install OpenShift CLI (oc) - not available in Fedora repos
+RUN curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+    | tar xzf - -C /usr/local/bin oc
+
+# Create non-root user 'coder' with UID 1000
+# Using UID 1000 for compatibility with --userns=keep-id
+RUN useradd -m -u 1000 -s /bin/bash coder && \
+    mkdir -p /workspace /home/coder/.config && \
+    chown -R coder:coder /workspace /home/coder/.config
+
+# Firewall initialization script (domains file baked per harness below)
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+# Allow coder user to run firewall init as root without password
+RUN echo "coder ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/sudoers.d/coder && \
+    chmod 0440 /etc/sudoers.d/coder
+
+# Install uv (fast Python package manager, includes uvx)
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
+# Pre-install common Python dev tools (repeatedly needed across projects)
+RUN pip install --break-system-packages pytest pytest-asyncio mypy httpx ruff pyright pytest-cov
+
+# Pre-install common Node.js dev tools
+# LSP servers (required by LSP plugins), formatter, TS runner
+RUN npm install -g typescript typescript-language-server prettier tsx yarn
+
+# Switch to coder user for user-level tooling and config
+USER coder
+WORKDIR /home/coder
+
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    --default-toolchain stable --profile default --component rust-analyzer
+ENV PATH="/home/coder/.cargo/bin:${PATH}"
+RUN cargo install cargo-watch
+
+# Configure git to use GH_TOKEN for HTTPS authentication when available
+# This credential helper returns the token from the environment variable
+RUN git config --global credential.helper '!f() { test -n "$GH_TOKEN" && echo "password=$GH_TOKEN"; }; f'
+
+# tmux config for agent teams split-pane mode
+RUN printf '%s\n' \
+    'set -g mouse on' \
+    'set -g exit-empty on' \
+    > /home/coder/.tmux.conf
+
+# Background monitor script for auto-closing orphaned tmux teammate panes.
+# Polls every 3 seconds, kills non-lead panes where the harness has exited
+# (pane is running just bash) and the pane is older than 10 seconds
+# (avoids race with pane startup before the harness launches).
+RUN cat > /home/coder/.ccbox-tmux-monitor.sh << 'MONITOR'
+#!/bin/bash
+while tmux has-session -t coder 2>/dev/null; do
+    sleep 3
+    now=$(date +%s)
+    tmux list-panes -s -t coder -F '#{pane_id} #{pane_current_command} #{pane_created}' 2>/dev/null | \
+    while read -r pane_id cmd created; do
+        [ "$pane_id" = "%0" ] && continue
+        if [ "$cmd" = "bash" ]; then
+            age=$((now - created))
+            [ "$age" -gt 10 ] && tmux kill-pane -t "$pane_id" 2>/dev/null
+        fi
+    done
+done
+MONITOR
+RUN chmod +x /home/coder/.ccbox-tmux-monitor.sh
+
+# Container-friendly Chrome flags (rootless container, limited /dev/shm)
+ENV CHROME_PATH="/usr/lib64/chromium-browser/chromium-browser"
+ENV CHROME_FLAGS="--no-sandbox --disable-dev-shm-usage"
+
+# Playwright MCP: use system Chromium, skip bundled browser download
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/usr/lib64/chromium-browser/chromium-browser"
+ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH="/usr/lib64/chromium-browser/chromium-browser"
+
+# Playwright MCP config file for reliable system browser usage
+# (works around known --executable-path CLI bugs in some @playwright/mcp versions)
+RUN cat > /home/coder/.playwright-mcp-config.json << 'PWCONFIG'
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "executablePath": "/usr/lib64/chromium-browser/chromium-browser",
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    }
+  }
+}
+PWCONFIG
+
+# Match official devcontainer memory settings
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+
+# Add user-level install locations to PATH:
+# - ~/.local/bin (Claude Code native installer)
+# - ~/.npm-global/bin (host-mounted npm packages)
+ENV PATH="/home/coder/.npm-global/bin:/home/coder/.local/bin:${PATH}"
+
+# Disable auto-updaters in container (version controlled via image build).
+# Each harness only reads its own variable; setting all is harmless.
+# (Codex has no such env var: cxbox passes -c check_for_update_on_startup=false.)
+ENV DISABLE_AUTOUPDATER=1
+ENV OPENCODE_DISABLE_AUTOUPDATE=1

@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/
 
+# Qwen Code local settings
+.qwen/settings.json
+
 # Playwright MCP logs
 .playwright-mcp/
 

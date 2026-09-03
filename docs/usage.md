@@ -1,6 +1,6 @@
 # Usage
 
-All three launchers (`ccbox`, `ocbox`, `qcbox`) share the same common flags; only the version flag and a few harness-specific options differ.
+All four launchers (`ccbox`, `ocbox`, `qcbox`, `cxbox`) share the same common flags; only the version flag and a few harness-specific options differ.
 
 ## Basics
 
@@ -9,11 +9,13 @@ All three launchers (`ccbox`, `ocbox`, `qcbox`) share the same common flags; onl
 ccbox            # Claude Code
 ocbox            # OpenCode
 qcbox            # Qwen Code
+cxbox            # Codex CLI
 
 # Use a specific harness version (if a container build exists for it)
 ccbox --claude-version <version>
 ocbox --opencode-version <version>
 qcbox --qwen-version <version>
+cxbox --codex-version <version>
 
 # Pass arguments directly to the harness CLI
 ccbox -- --help
@@ -21,13 +23,14 @@ ccbox -- --version
 ocbox -- run "explain this repo"
 ```
 
-The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qcbox}` on first run. Unknown flags are passed through to the harness CLI.
+The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qcbox,cxbox}` on first run. Unknown flags are passed through to the harness CLI.
 
 ## Common Flags
 
 | Flag | Description |
 |------|-------------|
-| `--build` | Build the image locally (development, or Apple Silicon) |
+| `--build` | Build the harness image locally on top of the base image (development, or Apple Silicon) |
+| `--build-base` | Also build the base image locally from `Dockerfile.base` (implies `--build`) |
 | `--local` | Use the locally-built image instead of pulling |
 | `--with-firewall` | Restrict outbound network to an allowlist (Linux only) |
 | `--no-clipboard` | Disable host clipboard/display access |
@@ -40,13 +43,13 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
-ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credentials` is available on all three launchers (see below).
+ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credentials` is available on all four launchers (see below).
 
 ## Sessions and Isolation
 
 - Each project directory gets isolated history/session data, keyed by a hash of its path — two projects with the same name in different locations don't collide.
 - You can run **multiple sessions simultaneously** in the same project. Each session gets a unique container name; project data is shared between them.
-- Chat transcripts persist in the per-project data dir, so you can resume past conversations after a container exits: `ccbox -- --resume`, `ocbox -- --continue` (or `-c`), `qcbox -- --resume`.
+- Chat transcripts persist in the per-project data dir, so you can resume past conversations after a container exits: `ccbox -- --resume`, `ocbox -- --continue` (or `-c`), `qcbox -- --resume`, `cxbox -- resume`.
 - See [architecture.md](architecture.md) for exactly what is mounted, shared, and isolated per harness.
 
 ## API Provider Configuration
@@ -60,8 +63,9 @@ Every launcher always forwards the host environment variables matching its harne
 | `ccbox` | `ANTHROPIC_*`, `CLAUDE_CODE_*`, `CLAUDE_AX_*`, `CLAUDE_ENABLE_*`, `CLAUDE_AUTOCOMPACT_*` | `AWS_REGION`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `OTEL_METRICS_EXPORTER`, `OTEL_LOG_*`, `OTEL_RESOURCE_ATTRIBUTES`, plus non-credential Claude-specific vars (`MAX_THINKING_TOKENS`, `MCP_TIMEOUT`, `NODE_OPTIONS`, `NO_COLOR`, …) | `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.claude.json` |
 | `ocbox` | `OPENCODE_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*` | `AWS_REGION`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, plus `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR` | the whole `~/.config/opencode/` directory (incl. `opencode.json`) |
 | `qcbox` | `QWEN_*`, `OPENAI_*`, `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*` | `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR`, `NODE_EXTRA_CA_CERTS` (non-credential) | `~/.qwen/settings.json` (a home-level `~/.qwen/.env` is also mounted read-only if present) |
+| `cxbox` | `CODEX_*`, `OPENAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*` | `AWS_REGION`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, plus `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR` | `~/.codex/config.toml` |
 
-GitHub token injection (`GH_TOKEN`) is separate and works the same for all three (see [GitHub Authentication](#github-authentication)).
+GitHub token injection (`GH_TOKEN`) is separate and works the same for all four (see [GitHub Authentication](#github-authentication)).
 
 > **Consequence:** if your harness's main config file contains API keys (a `"env"` block or a provider definition with an `apiKey`/`envKey`), those files are mounted into the container **regardless of `--with-credentials`** — that flag only controls the separate OAuth/credential store file (see [Credentials](#credentials)). If that is not what you want, don't keep keys in the shared config: use a shell export (or per-project override below), or a file that is *not* mounted.
 
@@ -113,16 +117,18 @@ The forwarding above gets variables *into* the container; how the harness picks 
 - **ccbox (Claude Code)** — reads standard env vars directly (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_VERTEX` + `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_USE_BEDROCK` + `AWS_*`, …). The `"env"` block in any settings file is an ordinary settings level (see precedence below). Claude Code does **not** auto-load `.env` files.
 - **ocbox (OpenCode)** — for built-in providers, the key comes from `auth.json` (via `/connect` — that's the file `--with-credentials` shares) *or* from the standard env var the provider declares, e.g. `ANTHROPIC_API_KEY` (Anthropic), `OPENAI_API_KEY` (OpenAI), `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `AZURE_API_KEY` + `AZURE_RESOURCE_NAME` (Azure), `AWS_*` (Bedrock) — all covered by the forwarded prefixes. For **custom** providers, use substitution in the config instead: `"apiKey": "{env:MY_KEY}"`. OpenCode does **not** auto-load `.env` files.
 - **qcbox (Qwen Code)** — reads the API key from the env var named by `envKey` in your `modelProviders` entry (or the auth type's default, e.g. `OPENAI_API_KEY`, `DASHSCOPE_API_KEY`). Priority: shell environment > auto-loaded `.env` file > `"env"` block in settings. Qwen Code auto-loads the **first** `.env` it finds walking up from the project root: `.qwen/.env`, then `.env` (fallback: `~/.qwen/.env`, `~/.env`) — only the first file is used, and it never overrides already-set variables.
+- **cxbox (Codex CLI)** — with a ChatGPT account, sign in via `codex login` (the OAuth session lands in `auth.json`, the file `--with-credentials` shares). With an API key, set `OPENAI_API_KEY` (forwarded from the host) or put a `model_providers` entry in `~/.codex/config.toml`. Codex does **not** auto-load `.env` files; it reads env vars directly.
 
 ### Per-project overrides (keep the shared config key-free)
 
-Each project is mounted at `/workspace`, so a project-local config file lives inside the project and **overrides the shared global config** for sessions started there — without touching your `~/.claude/`, `~/.config/opencode/`, or `~/.qwen/` files:
+Each project is mounted at `/workspace`, so a project-local config file lives inside the project and **overrides the shared global config** for sessions started there — without touching your `~/.claude/`, `~/.config/opencode/`, `~/.qwen/`, or `~/.codex/` files:
 
 | Launcher | Project-local override (lives in the project, read-write) |
 |----------|-----------------------------------------------------------|
 | `ccbox` | `.claude/settings.local.json` (you, this project) and `.claude/settings.json` (team-shared). Precedence: project local > project > user `~/.claude/settings.json`. |
 | `ocbox` | `opencode.json` / `opencode.jsonc` in the project root (or nearest git root). Project config overrides global `~/.config/opencode/opencode.json` for conflicting keys. |
 | `qcbox` | `.qwen/settings.json` in the project root (project settings override user settings), and/or a project `.qwen/.env` / `.env` for keys. |
+| `cxbox` | `AGENTS.md` in the project root (or nearest git root) for per-project instructions; `codex.md` for memory. (The `model_providers`/key config itself is global `~/.codex/config.toml` — use a forwarded env var for per-project keys.) |
 
 Example — per-project key, shared config stays clean (ccbox, shown for the others by analogy):
 
@@ -154,13 +160,13 @@ Note: because project-local files sit in the workspace, they are visible to what
 
 ## Pin a Version (for teams)
 
-Each harness has its own version pin file in the repo directory: `CLAUDE_VERSION` (ccbox), `OPENCODE_VERSION` (ocbox), `QWENCODE_VERSION` (qcbox):
+Each harness has its own version pin file in the repo directory: `CLAUDE_VERSION` (ccbox), `OPENCODE_VERSION` (ocbox), `QWENCODE_VERSION` (qcbox), `CODEX_VERSION` (cxbox):
 
 ```bash
 echo "<version>" > ~/path/to/ccbox/CLAUDE_VERSION
 ```
 
-This ensures everyone uses the same version. The `--claude-version` / `--opencode-version` / `--qwen-version` flags override the respective file.
+This ensures everyone uses the same version. The `--claude-version` / `--opencode-version` / `--qwen-version` / `--codex-version` flags override the respective file.
 
 Version pin files only exist in clone-based installs (the launcher looks for them next to its resolved location). With a flat install (scripts copied to `~/.local/bin`), the image tag defaults to `latest` — use the version flag to pin.
 
@@ -193,7 +199,7 @@ ccbox --github-token "ghp_xxx"     # Use specific token instead of auto-detectin
 There are **two different things** that can hold credentials, and only one of them is gated by a flag:
 
 1. **The harness credential store file** — a dedicated file each harness writes for OAuth sessions / API keys. This is **not** mounted by default. This is the only thing `--with-credentials` controls.
-2. **The shared config file(s)** — the main settings/config each launcher always mounts (ccbox `~/.claude/settings.json`, ocbox `~/.config/opencode/opencode.json`, qcbox `~/.qwen/settings.json`). If *you* put an API key inside one of these (an `"env"` block, or a provider's `apiKey`/`envKey`), that file travels into the container **with or without `--with-credentials`**, because the config must be mounted for the harness to behave correctly. This is a deliberate design trade-off: the config is always available, so any secret you store in it is always available too.
+2. **The shared config file(s)** — the main settings/config each launcher always mounts (ccbox `~/.claude/settings.json`, ocbox `~/.config/opencode/opencode.json`, qcbox `~/.qwen/settings.json`, cxbox `~/.codex/config.toml`). If *you* put an API key inside one of these (an `"env"` block, or a provider's `apiKey`/`envKey`), that file travels into the container **with or without `--with-credentials`**, because the config must be mounted for the harness to behave correctly. This is a deliberate design trade-off: the config is always available, so any secret you store in it is always available too.
 
 So: omitting `--with-credentials` does **not** guarantee a credential-free container — it only keeps the dedicated credential store file private. If you store keys in your main config, they are passed regardless. To keep the container free of a given key, don't put it in the shared config; use a forwarded environment variable (see [API Provider Configuration](#api-provider-configuration)) or a project-local override file that lives in the project, not in the shared home dir. Without any of these, plain API-key auth still needs nothing extra — provider keys are forwarded from the host environment automatically.
 
@@ -203,9 +209,10 @@ To share the harness's credential store file (API key or OAuth session, shared a
 ccbox --with-credentials   # mount ~/.claude/.credentials.json (API key or OAuth)
 ocbox --with-credentials   # mount ~/.local/share/opencode/auth.json (provider credentials)
 qcbox --with-credentials   # mount ~/.qwen/oauth_creds.json (Qwen OAuth)
+cxbox --with-credentials   # mount ~/.codex/auth.json (API key or ChatGPT OAuth)
 ```
 
-The file is mounted read-write, created (empty) on the host if it does not exist yet. Without the flag, the container uses its own empty credential file — so `claude /login` (ccbox), `opencode auth login` (ocbox), or the `/auth` flow (qcbox) inside the container does not persist to the host.
+The file is mounted read-write, created (empty) on the host if it does not exist yet. Without the flag, the container uses its own empty credential file — so `claude /login` (ccbox), `opencode auth login` (ocbox), the `/auth` flow (qcbox), or `codex login` (cxbox) inside the container does not persist to the host.
 
 ## Firewall
 
@@ -285,9 +292,11 @@ Primary supported platform, full feature support: SELinux volume labeling, firew
 Build a local ARM64 image to avoid x86 emulation:
 
 ```bash
-ccbox --build          # Build native ARM64 image
+ccbox --build          # Build native ARM64 images (the base is built natively too, since the published base is x86_64 only)
 ccbox                  # Auto-detects and uses local image
 ```
+
+Once a local `codebox-base:latest` exists, later `--build` runs of any harness reuse it; run `--build-base` to refresh it.
 
 Differences from Linux:
 

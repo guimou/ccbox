@@ -1,5 +1,17 @@
 name: Release
 
+# Release orchestration:
+#   1. detect  - figure out which harnesses need a (re)build and with which tags
+#   2. base    - build the shared codebox-base image once (skipped when the
+#                content tag already exists in the registry)
+#   3. build   - one independent job per harness, FROM that exact base tag;
+#                each job pushes its image and creates its own git tag and
+#                GitHub Release, so one failing harness never blocks another
+#
+# A weekly scheduled run (and the manual "rebuild all" dispatch) forces a
+# base rebuild to pick up Fedora package updates, then rebuilds every harness
+# as a -N suffixed release of its current pinned version.
+
 on:
   push:
     branches: [main]
@@ -8,19 +20,34 @@ on:
       - 'CLAUDE_VERSION'
       - 'OPENCODE_VERSION'
       - 'QWENCODE_VERSION'
-      # Shared image/launcher files (affect all harnesses)
-      - 'Dockerfile'
+      - 'CODEX_VERSION'
+      # Base image inputs (rebuild the base, then all harnesses)
+      - 'Dockerfile.base'
       - 'os-packages.txt'
-      - 'firewall-domains.txt'
       - 'init-firewall.sh'
+      # Shared harness-stage / launcher files (rebuild all harnesses)
+      - 'Dockerfile'
+      - 'firewall-domains.txt'
       - 'lib/**'
       # Harness-specific files
       - 'firewall-domains-claude.txt'
       - 'firewall-domains-opencode.txt'
       - 'firewall-domains-qwencode.txt'
+      - 'firewall-domains-codex.txt'
       - 'ccbox'
       - 'ocbox'
       - 'qcbox'
+      - 'cxbox'
+  schedule:
+    # Weekly refresh of the base (Fedora updates) and all harnesses
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      rebuild_all:
+        description: 'Force-rebuild the base image and every harness (-N releases)'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   detect:
@@ -30,6 +57,7 @@ jobs:
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
       any: ${{ steps.detect.outputs.any }}
+      force_base: ${{ steps.detect.outputs.force_base }}
 
     steps:
       - name: Checkout repository
@@ -40,14 +68,31 @@ jobs:
       - name: Detect harnesses to release
         id: detect
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
-          echo "Changed files:"
-          echo "$CHANGED"
+          # Scheduled runs and manual "rebuild all" dispatches refresh everything
+          REBUILD_ALL=false
+          if [ "${{ github.event_name }}" = "schedule" ] || \
+             { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.rebuild_all }}" = "true" ]; }; then
+            REBUILD_ALL=true
+          fi
 
-          # Shared files trigger a rebuild of every harness
-          SHARED_CHANGED=false
-          if echo "$CHANGED" | grep -qE '^(Dockerfile|os-packages\.txt|firewall-domains\.txt|init-firewall\.sh|lib/)'; then
+          if [ "$REBUILD_ALL" = "true" ]; then
+            CHANGED=""
             SHARED_CHANGED=true
+            FORCE_BASE=true
+            echo "Full refresh requested (${{ github.event_name }})"
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD)
+            echo "Changed files:"
+            echo "$CHANGED"
+
+            # Shared files trigger a rebuild of every harness
+            SHARED_CHANGED=false
+            if echo "$CHANGED" | grep -qE '^(Dockerfile|Dockerfile\.base|os-packages\.txt|firewall-domains\.txt|init-firewall\.sh|lib/)'; then
+              SHARED_CHANGED=true
+            fi
+            # Base inputs produce a new base content tag; build-base.yml skips
+            # the build when the tag already exists, so no force is needed
+            FORCE_BASE=false
           fi
 
           MATRIX="[]"
@@ -65,7 +110,7 @@ jobs:
             local git_tag image_tag
             # A version bump releases the plain version; any other relevant
             # change releases a -N suffixed rebuild of the current version
-            if git diff HEAD~1 HEAD -- "$version_file" | grep -q '^[+-][0-9]'; then
+            if [ "$REBUILD_ALL" != "true" ] && git diff HEAD~1 HEAD -- "$version_file" | grep -q '^[+-][0-9]'; then
               git_tag="${box}-v${version}"
               image_tag="${version}"
             elif [ "$SHARED_CHANGED" = "true" ] || echo "$CHANGED" | grep -qE "^(${launcher}|${overlay})$"; then
@@ -99,17 +144,31 @@ jobs:
           add_harness claude   ccbox CLAUDE_VERSION   ccbox firewall-domains-claude.txt
           add_harness opencode ocbox OPENCODE_VERSION ocbox firewall-domains-opencode.txt
           add_harness qwencode qcbox QWENCODE_VERSION qcbox firewall-domains-qwencode.txt
+          add_harness codex    cxbox CODEX_VERSION    cxbox firewall-domains-codex.txt
 
           echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+          echo "force_base=${FORCE_BASE}" >> $GITHUB_OUTPUT
           if [ "$MATRIX" = "[]" ]; then
             echo "any=false" >> $GITHUB_OUTPUT
           else
             echo "any=true" >> $GITHUB_OUTPUT
           fi
 
-  build:
+  # Build (or reuse) the shared base once, only if at least one harness needs it
+  base:
     needs: detect
     if: needs.detect.outputs.any == 'true'
+    uses: ./.github/workflows/build-base.yml
+    with:
+      force: ${{ needs.detect.outputs.force_base == 'true' }}
+    secrets: inherit
+
+  # One independent job per harness: build FROM the base tag, push, tag, release
+  build:
+    needs: [detect, base]
+    if: needs.detect.outputs.any == 'true'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -118,50 +177,6 @@ jobs:
     with:
       harness: ${{ matrix.harness }}
       image_tag: ${{ matrix.image_tag }}
+      base_tag: ${{ needs.base.outputs.base_tag }}
+      git_tag: ${{ matrix.git_tag }}
     secrets: inherit
-
-  release:
-    needs: [detect, build]
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.detect.outputs.matrix) }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${{ matrix.git_tag }}"
-          IMAGE_TAG="${{ matrix.image_tag }}"
-          BOX="${{ matrix.box }}"
-
-          # Find previous release tag of this harness for the changelog range
-          # (fall back to legacy unprefixed v* tags used before multi-harness)
-          PREV_TAG=$(git tag --list "${BOX}-v*" --sort=-version:refname | head -1)
-          if [ -z "$PREV_TAG" ] && [ "$BOX" = "ccbox" ]; then
-            PREV_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
-          fi
-
-          # Build release notes with PR-style content
-          NOTES="Container image: \`quay.io/guimou/${BOX}:${IMAGE_TAG}\`"
-          NOTES="${NOTES}"$'\n\n'"## Changes"$'\n'
-          if [ -n "$PREV_TAG" ]; then
-            NOTES="${NOTES}$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s (%h)' --reverse)"
-          else
-            NOTES="${NOTES}$(git log --pretty=format:'- %s (%h)' --reverse)"
-          fi
-
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "$NOTES" \
-            --target "${{ github.sha }}"
