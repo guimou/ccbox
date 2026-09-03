@@ -103,14 +103,23 @@ harness_setup_project() {
     local shared_config="${CODEX_CONFIG_DIR}/config.toml"
     local project_config="${PROJECT_DATA_DIR}/data/config.toml"
 
-    # Earlier cxbox versions bind-mounted config.toml as a file; podman left a
-    # mount-point placeholder at this path owned by the container's root
-    # (a subuid on the host), unreadable by coder. Replace anything we do not
-    # own (podman unshare gives us the subuid mapping needed to delete it).
-    if [[ -e "$project_config" && ! -O "$project_config" ]]; then
-        log_warn "Replacing ${project_config} (not owned by you; leftover bind-mount placeholder)"
-        podman unshare rm -f "$project_config" 2>/dev/null || rm -f "$project_config"
-    fi
+    # Podman creates the mount point for a single-file bind mount inside the
+    # data dir as the container's root (a host subuid), unreadable by coder.
+    # config.toml got one from earlier cxbox versions (it used to be
+    # file-mounted); auth.json gets one from --with-credentials runs. Replace
+    # anything we do not own (podman unshare has the subuid mapping needed to
+    # delete it), and pre-create auth.json ourselves so a later
+    # --with-credentials mount lands on a file coder can read.
+    local project_auth="${PROJECT_DATA_DIR}/data/auth.json"
+    local f
+    for f in "$project_config" "$project_auth"; do
+        if [[ -e "$f" && ! -O "$f" ]]; then
+            log_warn "Replacing ${f} (not owned by you; leftover bind-mount placeholder)"
+            podman unshare rm -f "$f" 2>/dev/null || rm -f "$f"
+        fi
+    done
+    # Empty credentials store (valid JSON) unless one already exists
+    [[ -f "$project_auth" ]] || echo '{}' > "$project_auth"
 
     if [[ ! -f "$project_config" ]]; then
         cp "$shared_config" "$project_config"
