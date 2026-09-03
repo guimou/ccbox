@@ -274,6 +274,7 @@ show_help() {
     echo "  --with-gcloud            Mount ~/.config/gcloud read-only (for Vertex AI)"
     echo "  --with-gitconfig         Mount ~/.gitconfig read-only (git identity and config)"
     echo "  --list-sessions          List active sessions for this project"
+    echo "  --shell                  Start an interactive bash shell instead of ${HARNESS_CLI} (same mounts; for troubleshooting)"
     echo "  --install                Show installation instructions"
     harness_extra_help
     echo "  -h, --help               Show this help message"
@@ -287,6 +288,7 @@ show_help() {
     echo "  ${BOX_NAME} --with-firewall              # Run with network restrictions"
     echo "  ${BOX_NAME} --no-github                  # Run without GitHub token"
     echo "  ${BOX_NAME} -- --version                 # Pass args to ${HARNESS_CLI}"
+    echo "  ${BOX_NAME} --shell                      # Open a shell in the container instead of ${HARNESS_CLI}"
 }
 
 # Read version from the harness version file if not specified via command line
@@ -411,6 +413,7 @@ box_main() {
     WITH_GCLOUD=false
     WITH_GITCONFIG=false
     LIST_SESSIONS=false
+    OPEN_SHELL=false
     SHOW_INSTALL=false
     HARNESS_VERSION=""
     NPM_GLOBAL=""
@@ -448,6 +451,10 @@ box_main() {
                 ;;
             --with-firewall)
                 NO_FIREWALL=false
+                shift
+                ;;
+            --shell)
+                OPEN_SHELL=true
                 shift
                 ;;
             --list-sessions)
@@ -735,6 +742,15 @@ box_main() {
     LAUNCH_CMD="${HARNESS_CLI} ${EXTRA_ARGS[*]}"
     NEEDS_SHELL=false
     harness_pre_run
+
+    # --shell: drop the harness command (and anything the hook added to it)
+    # and start an interactive bash with the exact same container setup
+    if $OPEN_SHELL; then
+        HARNESS_CLI="/bin/bash"
+        EXTRA_ARGS=()
+        LAUNCH_CMD="/bin/bash"
+        NEEDS_SHELL=false
+    fi
 
     if $NO_FIREWALL && ! $NEEDS_SHELL; then
         PODMAN_ARGS+=("$IMAGE_REF" "$HARNESS_CLI" "${EXTRA_ARGS[@]}")

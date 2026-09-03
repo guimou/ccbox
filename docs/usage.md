@@ -31,6 +31,7 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 |------|-------------|
 | `--build` | Build the harness image locally on top of the base image (development, or Apple Silicon) |
 | `--build-base` | Also build the base image locally from `Dockerfile.base` (implies `--build`) |
+| `--shell` | Start an interactive bash shell instead of the harness CLI, with the exact same mounts and environment (troubleshooting) |
 | `--local` | Use the locally-built image instead of pulling |
 | `--with-firewall` | Restrict outbound network to an allowlist (Linux only) |
 | `--no-clipboard` | Disable host clipboard/display access |
