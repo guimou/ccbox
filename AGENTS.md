@@ -64,6 +64,9 @@ By default, the container image is pulled from `quay.io/guimou/ccbox` (or `ocbox
 # List active sessions for current project
 ./ccbox --list-sessions
 
+# Open a bash shell in the container instead of the harness (same mounts, for troubleshooting)
+./ccbox --shell
+
 # OpenCode, Qwen Code and Codex work the same way (same common flags)
 ./ocbox
 ./ocbox --opencode-version <version>
