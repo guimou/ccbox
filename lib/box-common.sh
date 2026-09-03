@@ -1,9 +1,9 @@
 #!/bin/bash
-# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox).
+# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox / cxbox).
 #
 # This file is sourced by the thin per-harness wrappers, which must define
 # the following variables before sourcing:
-#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox)
+#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox, cxbox)
 #   HARNESS_TITLE   - human-readable harness name (e.g. "Claude Code")
 #   HARNESS_CLI     - CLI binary to run inside the container
 #   REGISTRY_IMAGE  - registry repository (e.g. "guimou/ccbox")

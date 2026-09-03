@@ -130,9 +130,9 @@ ENV PATH="/home/coder/.npm-global/bin:/home/coder/.local/bin:${PATH}"
 
 # Disable auto-updaters in container (version controlled via image build).
 # Each harness only reads its own variable; setting all is harmless.
+# (Codex has no such env var: cxbox passes -c check_for_update_on_startup=false.)
 ENV DISABLE_AUTOUPDATER=1
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
-ENV CODEX_DISABLE_AUTOUPDATE=1
 
 # ---------------------------------------------------------------------------
 # Harness-specific layers start here
@@ -206,9 +206,9 @@ RUN set -eu; \
             > /etc/qwen-code/settings.json ;; \
     codex) \
         npm install -g "@openai/codex@${HARNESS_VERSION:-latest}" && \
+        # Mount target only: the launcher mounts the per-project data dir
+        # as the whole ~/.codex (config.toml / auth.json are mounted on top)
         mkdir -p /home/coder/.codex && \
-        # Empty credentials store (host auth.json is opt-in via --with-credentials)
-        echo '{}' > /home/coder/.codex/auth.json && \
         chown -R coder:coder /home/coder/.codex ;; \
     *) echo "Unknown HARNESS: ${HARNESS}" >&2; exit 1 ;; \
     esac

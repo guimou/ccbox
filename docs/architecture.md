@@ -31,7 +31,7 @@ All common layers (Fedora 44 base, OS packages, language runtimes, dev tools, Ru
    - `claude` → native installer from claude.ai
    - `opencode` → `npm install -g opencode-ai@<version>`
    - `qwencode` → `npm install -g @qwen-code/qwen-code@<version>`, plus a baked `/etc/qwen-code/settings.json` that disables auto-update and Qwen's own sandbox (to avoid sandbox-in-container nesting)
-   - `codex` → `npm install -g @openai/codex@<version>` (npm wrapper that resolves to a per-platform native binary), plus an empty `~/.codex/auth.json` so the container always finds the credential file
+   - `codex` → `npm install -g @openai/codex@<version>` (npm wrapper that resolves to a per-platform native binary). Codex has no system-level config, so the `cxbox` launcher disables Codex's own sandbox (`sandbox_mode="danger-full-access"`, the container is the sandbox and bubblewrap/Landlock cannot nest in it) and the startup update check via `-c` overrides
 
 Auto-updaters are disabled for all harnesses — versions are controlled by the pin files and image builds.
 
@@ -171,7 +171,7 @@ An optional `~/.qwen/.env` is mounted read-only if present.
 | `~/.codex/auth.json` | API key / ChatGPT OAuth credentials (opt-in, `--with-credentials`) | Shared (rw, not mounted by default) |
 | `~/.codex/cxbox-projects/{name}_{hash}/data/` | Sessions, state DB, memories, goals (mounted as the container `~/.codex`) | Per-project |
 
-Codex stores all state under `CODEX_HOME` (default `~/.codex`), keyed by project path. The per-project host directory is mounted as the container's entire `~/.codex`, so sessions, the state DB, and memories never mix across projects; the shared `config.toml` is file-mounted on top, and with `--with-credentials` the shared `auth.json` is additionally mounted on top so credentials stay global. Without the flag the container uses its own empty credential file, so `codex login` inside the container does not persist to the host.
+Codex stores all state under `~/.codex` (`CODEX_HOME` is intentionally not forwarded into the container), keyed by project path. The per-project host directory is mounted as the container's entire `~/.codex`, so sessions, the state DB, and memories never mix across projects; the shared `config.toml` is file-mounted on top, and with `--with-credentials` the shared `auth.json` is additionally mounted on top so credentials stay global. Without the flag `codex login` inside the container writes `auth.json` into the per-project data dir, so it does not persist to the host file or to other projects.
 
 ## Firewall
 
