@@ -84,6 +84,7 @@ The container image is pulled automatically on first run. A few common flags:
 ```bash
 ccbox --with-firewall     # Restrict outbound network (Linux only)
 ccbox --build             # Build the image locally (development, Apple Silicon)
+ccbox --build-base        # Also rebuild the shared base image locally
 ccbox --local             # Use the locally-built image
 ccbox -- --version        # Pass arguments to the harness CLI
 ccbox --help              # All options

@@ -4,7 +4,8 @@
 
 | File | Description |
 |------|-------------|
-| `Dockerfile` | Container image definition (Fedora 44 base), parameterized by `HARNESS`/`HARNESS_VERSION` build args |
+| `Dockerfile.base` | Harness-independent base image (Fedora 44, OS packages, runtimes, tools), published as `quay.io/guimou/codebox-base` |
+| `Dockerfile` | Harness image built `FROM ${BASE_IMAGE}`, parameterized by `HARNESS`/`HARNESS_VERSION` build args |
 | `lib/box-common.sh` | Shared launcher engine (sourced by all four launchers) |
 | `ccbox` / `ocbox` / `qcbox` / `cxbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
 | `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` | Harness version pin files |
@@ -12,10 +13,11 @@
 | `firewall-domains.txt` | Allowed network domains common to all harnesses |
 | `firewall-domains-{claude,opencode,qwencode,codex}.txt` | Harness-specific allowed domains, concatenated with the common file at build time |
 | `init-firewall.sh` | Firewall initialization script (iptables/ipset) |
-| `.github/workflows/release.yml` | Release workflow (detects which harnesses to build) |
-| `.github/workflows/build-and-push.yml` | Reusable per-harness image build |
+| `.github/workflows/release.yml` | Release workflow (detects which harnesses to build, builds the base once, then one job per harness) |
+| `.github/workflows/build-base.yml` | Reusable base image build (content-tagged, skipped when the tag exists) |
+| `.github/workflows/build-and-push.yml` | Reusable per-harness image build, tag and GitHub Release |
 
-See [architecture.md](architecture.md) for how the Dockerfile, engine, and wrappers fit together.
+See [architecture.md](architecture.md) for how the base image, harness Dockerfile, engine, and wrappers fit together.
 
 ## Building Locally
 
@@ -29,13 +31,22 @@ See [architecture.md](architecture.md) for how the Dockerfile, engine, and wrapp
 # Use the locally-built image
 ./ccbox --local
 
-# Same for the other harnesses (each builds its own image from the shared Dockerfile)
+# Same for the other harnesses (each builds its own image from the shared harness Dockerfile)
 ./ocbox --build
 ./qcbox --build
 ./cxbox --build
+
+# Also build the base image locally (after editing Dockerfile.base / os-packages.txt)
+./ccbox --build-base
 ```
 
-Common image layers never reference the `HARNESS` build arg, so building a second harness locally reuses the shared layer cache.
+`--build` only builds the harness layer (`Dockerfile`). The base it starts from is resolved in this order:
+
+1. A local `codebox-base:latest` if one exists (built earlier with `--build-base`).
+2. On arm64 hosts (Apple Silicon), the base is built natively, since the published base is x86_64 only.
+3. Otherwise the published `quay.io/guimou/codebox-base:latest` is pulled.
+
+So a harness-only change rebuilds in seconds, and a base change is built once and reused by every harness (`--build-base` for one harness, then plain `--build` for the others).
 
 ## Adding OS Packages
 
@@ -43,7 +54,7 @@ Edit `os-packages.txt` (one package per line) and rebuild:
 
 ```bash
 echo "package-name" >> os-packages.txt
-./ccbox --build
+./ccbox --build-base
 ./ccbox --local
 ```
 
@@ -82,14 +93,26 @@ Runs on pushes to `main` touching image/launcher files, and detects which harnes
 | Change | Effect | Git tag | Image tag |
 |--------|--------|---------|-----------|
 | Version pin file bump (e.g. `OPENCODE_VERSION`) | Release that harness | `{box}-v{version}` (e.g. `ocbox-v1.19.0`) | `{version}` |
-| Shared file (`Dockerfile`, `os-packages.txt`, `firewall-domains.txt`, `init-firewall.sh`, `lib/`) | Rebuild **all** harnesses | `{box}-v{version}-N` | `{version}-N` |
+| Base input (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`) | Rebuild the base, then **all** harnesses | `{box}-v{version}-N` | `{version}-N` |
+| Shared harness file (`Dockerfile`, `firewall-domains.txt`, `lib/`) | Rebuild **all** harnesses (base reused) | `{box}-v{version}-N` | `{version}-N` |
 | Harness-specific file (launcher script, firewall overlay) | Rebuild **only** that harness | `{box}-v{version}-N` | `{version}-N` |
+| Weekly schedule / manual "rebuild all" dispatch | Force-rebuild the base (Fedora updates), then **all** harnesses | `{box}-v{version}-N` | `{version}-N` |
 
-The `-N` suffix increments from existing `{box}-v{version}-*` tags. If the computed tag already exists, that harness is skipped. Multiple simultaneous changes (e.g. two version bumps in one push) release multiple harnesses via a build matrix. A GitHub Release is created per released harness; changelog ranges use the previous `{box}-v*` tag (with a fallback to legacy unprefixed `v*` tags for ccbox).
+The `-N` suffix increments from existing `{box}-v{version}-*` tags. If the computed tag already exists, that harness is skipped.
+
+The run is structured as three jobs:
+
+1. **detect** — computes the harness matrix above.
+2. **base** — runs only if at least one harness needs a build. Calls `build-base.yml`, which computes the base content tag and skips the build when that tag already exists in `quay.io/guimou/codebox-base` (a forced refresh overwrites it).
+3. **build** — one job per harness in the matrix, `fail-fast: false`, each calling `build-and-push.yml` with the base tag from step 2 and its git tag. Every harness job builds, pushes, tags and creates its GitHub Release on its own, so a failure in one harness never blocks the others. Changelog ranges use the previous `{box}-v*` tag (with a fallback to legacy unprefixed `v*` tags for ccbox).
+
+### Base workflow (`build-base.yml`)
+
+Reusable workflow (also manually dispatchable with a `force` input). The base tag is the short SHA of the last commit touching `Dockerfile.base`, `os-packages.txt` or `init-firewall.sh`; the image is pushed as `quay.io/guimou/codebox-base:{tag}` and `latest`. Build cache scope: `type=gha,scope=base`.
 
 ### Build workflow (`build-and-push.yml`)
 
-Reusable workflow called by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex`) and optional version/tag overrides. It resolves the harness to its image repository and version file, then builds with `HARNESS` and `HARNESS_VERSION` build args. Build caches are scoped per harness (`type=gha,scope={harness}`).
+Reusable workflow called once per harness by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex`) and optional version/tag/base overrides. It resolves the harness to its image repository and version file, verifies the base tag exists (derived from the commit when not given), builds `Dockerfile` with `BASE_IMAGE`, `HARNESS` and `HARNESS_VERSION` build args, pushes, and, when called with a `git_tag`, creates the git tag and GitHub Release. Build caches are scoped per harness (`type=gha,scope={harness}`).
 
 ### Image tags
 
@@ -117,7 +140,7 @@ To enable CI/CD pushes, configure GitHub repository secrets:
 1. **Create a Quay.io robot account:**
    - Log in to [quay.io](https://quay.io) → Account Settings → Robot Accounts
    - Create a robot account (e.g., `github_actions`)
-   - Grant **Write** permission to the `guimou/ccbox`, `guimou/ocbox`, `guimou/qcbox`, and `guimou/cxbox` repositories
+   - Grant **Write** permission to the `guimou/codebox-base`, `guimou/ccbox`, `guimou/ocbox`, `guimou/qcbox`, and `guimou/cxbox` repositories
 2. **Add GitHub secrets** (repository Settings → Secrets and variables → Actions):
 
    | Secret | Value |

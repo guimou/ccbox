@@ -29,7 +29,8 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 
 | Flag | Description |
 |------|-------------|
-| `--build` | Build the image locally (development, or Apple Silicon) |
+| `--build` | Build the harness image locally on top of the base image (development, or Apple Silicon) |
+| `--build-base` | Also build the base image locally from `Dockerfile.base` (implies `--build`) |
 | `--local` | Use the locally-built image instead of pulling |
 | `--with-firewall` | Restrict outbound network to an allowlist (Linux only) |
 | `--no-clipboard` | Disable host clipboard/display access |
@@ -291,9 +292,11 @@ Primary supported platform, full feature support: SELinux volume labeling, firew
 Build a local ARM64 image to avoid x86 emulation:
 
 ```bash
-ccbox --build          # Build native ARM64 image
+ccbox --build          # Build native ARM64 images (the base is built natively too, since the published base is x86_64 only)
 ccbox                  # Auto-detects and uses local image
 ```
+
+Once a local `codebox-base:latest` exists, later `--build` runs of any harness reuse it; run `--build-base` to refresh it.
 
 Differences from Linux:
 

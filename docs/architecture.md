@@ -1,6 +1,6 @@
 # Architecture
 
-One repository produces four container images and four launchers from a shared Dockerfile and launcher engine:
+One repository produces four container images and four launchers from a shared base image, a harness Dockerfile and a launcher engine:
 
 | Launcher | Harness | Image | Version pin file | Firewall overlay |
 |----------|---------|-------|------------------|------------------|
@@ -17,14 +17,19 @@ One repository produces four container images and four launchers from a shared D
 - **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), harness credentials (read-write, opt-in via `--with-credentials`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
 - **Rootless and SELinux-friendly** — Podman rootless with `--userns=keep-id`, `:z` volume labels on Linux.
 
-## One Dockerfile, Four Images
+## One Base, Four Images
 
-The Dockerfile is parameterized by two build args:
+The image is built in two stages, from two Dockerfiles:
 
+**`Dockerfile.base` → `quay.io/guimou/codebox-base`.** All harness-independent layers: Fedora 44 base, OS packages, language runtimes, dev tools, Rust toolchain, firewall script, `coder` user and environment setup. It never references a harness. CI builds it once and tags it by content — the short SHA of the last commit touching its inputs (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`) — plus `latest`. A harness-only change therefore never rebuilds the base, and a base change builds it exactly once for all four harnesses. Because the four images start from the *same* base tag, they always share an identical package set.
+
+**`Dockerfile` → the four harness images.** Starts `FROM ${BASE_IMAGE}` and is parameterized by three build args:
+
+- `BASE_IMAGE` — the base to build on (CI pins the content tag; the launcher passes a local `codebox-base:latest` or the published `latest`).
 - `HARNESS` — `claude`, `opencode`, `qwencode`, or `codex`; selects which single CLI is installed and which firewall overlay is baked in.
 - `HARNESS_VERSION` — the harness version to install (empty means latest).
 
-All common layers (Fedora 44 base, OS packages, language runtimes, dev tools, Rust toolchain, firewall script, environment setup) come **first** and never reference `HARNESS`, so the Docker build cache is fully shared across the four images. A single harness-specific block at the end:
+The harness stage is small and fast, and each harness build is independent of the others. It:
 
 1. Concatenates `firewall-domains.txt` with `firewall-domains-${HARNESS}.txt` into `/etc/codebox/firewall-domains.txt`.
 2. Installs exactly one harness CLI:
@@ -43,11 +48,11 @@ The launchers are thin wrappers around a shared engine, `lib/box-common.sh`:
 - The engine provides everything common: argument parsing, image pull/build/tag resolution, project keying, container naming, base mounts (workspace, timezone, audio), opt-in host mounts (`--with-gcloud`, `--with-gitconfig`), clipboard wiring, npm-global mount, GitHub token injection, firewall capabilities, and the final `podman run`.
 - Wrappers customize behavior through **hook functions** the engine calls at defined points: `harness_parse_arg` (harness-specific flags), `harness_ensure_config` (create global config on first run), `harness_setup_project` (create per-project host directories), `harness_mounts` (harness-specific volume mounts), `harness_pre_run` (wrap the launch command, e.g. tmux), and `harness_log_status`.
 
-The wrappers locate the engine relative to their (symlink-resolved) location, supporting two layouts: a repo clone (`lib/box-common.sh` next to the launchers, used via symlinks) or a flat install (`box-common.sh` copied next to the launchers, e.g. in `~/.local/bin`). In a flat install there are no version pin files or Dockerfile, so the image tag defaults to `latest` (overridable with the version flag) and `--build` is unavailable.
+The wrappers locate the engine relative to their (symlink-resolved) location, supporting two layouts: a repo clone (`lib/box-common.sh` next to the launchers, used via symlinks) or a flat install (`box-common.sh` copied next to the launchers, e.g. in `~/.local/bin`). In a flat install there are no version pin files or Dockerfiles, so the image tag defaults to `latest` (overridable with the version flag) and `--build` / `--build-base` are unavailable.
 
 ## Container Runtime
 
-- **Base**: `quay.io/fedora/fedora:44`
+- **Base**: `quay.io/guimou/codebox-base` (built from `quay.io/fedora/fedora:44`)
 - **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **SELinux**: `:z` volume labels for shared relabeling (multi-session safe); omitted on macOS (virtiofs)
 - **Container name**: `{box}-{project}-{hash}-{session-id}` — multiple sessions can run simultaneously in the same project, sharing project data

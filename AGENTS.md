@@ -6,7 +6,7 @@ This file provides guidance to AI coding agents (Claude Code, OpenCode, Qwen Cod
 
 Containerized AI coding harness development environments for Fedora. Runs in Podman rootless mode with SELinux support and optional network firewall restrictions.
 
-One repo produces four images/launchers from a shared Dockerfile and launcher engine:
+One repo produces four images/launchers from a shared base image, a harness Dockerfile and a launcher engine:
 
 | Launcher | Harness | Image | Version pin file | Firewall overlay |
 |----------|---------|-------|------------------|------------------|
@@ -15,7 +15,7 @@ One repo produces four images/launchers from a shared Dockerfile and launcher en
 | `qcbox` | Qwen Code | `quay.io/guimou/qcbox` | `QWENCODE_VERSION` | `firewall-domains-qwencode.txt` |
 | `cxbox` | Codex CLI | `quay.io/guimou/cxbox` | `CODEX_VERSION` | `firewall-domains-codex.txt` |
 
-The Dockerfile selects the harness via the `HARNESS` build arg (`claude` / `opencode` / `qwencode` / `codex`) and its version via `HARNESS_VERSION`. Common layers never reference `HARNESS` so the build cache is shared across the four images.
+The image is built in two stages. `Dockerfile.base` holds everything harness-independent (Fedora, OS packages, runtimes, tools) and is published once as `quay.io/guimou/codebox-base`, tagged by the content of its inputs (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`). `Dockerfile` starts `FROM ${BASE_IMAGE}` and only adds the harness, selected via the `HARNESS` build arg (`claude` / `opencode` / `qwencode` / `codex`) and its version via `HARNESS_VERSION`. Each harness build is therefore small and independent of the others.
 
 ## Run
 
@@ -87,11 +87,17 @@ For local development, you can build the image locally:
 
 # Build specific version locally
 ./ccbox --build --claude-version <version>
+
+# Also rebuild the base image locally (after editing Dockerfile.base / os-packages.txt, or on Apple Silicon)
+./ccbox --build-base
 ```
+
+`--build` builds only the harness layer on top of the base image: a locally built `codebox-base:latest` if one exists, otherwise the published `quay.io/guimou/codebox-base:latest` (on arm64 hosts the base is built natively since the published one is x86_64 only).
 
 ## File Structure
 
-- `Dockerfile` - Container image definition (Fedora 44 base), parameterized by `HARNESS`/`HARNESS_VERSION` build args
+- `Dockerfile.base` - Harness-independent base image (Fedora 44, OS packages, runtimes, tools), published as `quay.io/guimou/codebox-base`
+- `Dockerfile` - Harness image built `FROM ${BASE_IMAGE}`, parameterized by `HARNESS`/`HARNESS_VERSION` build args
 - `os-packages.txt` - DNF packages to install (one per line)
 - `firewall-domains.txt` - Allowed network domains common to all harnesses (one per line)
 - `firewall-domains-{claude,opencode,qwencode,codex}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
@@ -223,13 +229,14 @@ Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--w
 
 ## CI/CD
 
-- `.github/workflows/release.yml` runs on pushes to main touching image/launcher files. It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (Dockerfile, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness.
-- `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). Images are tagged `{version}`, `latest`, and the commit SHA.
+- `.github/workflows/release.yml` runs on pushes to main touching image/launcher files (plus a weekly schedule and a manual "rebuild all" dispatch). It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (`Dockerfile`, `Dockerfile.base`, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness. If at least one harness needs a build, the base image is built first (once, skipped when its content tag already exists), then each harness builds in its own independent job (`fail-fast: false`).
+- `.github/workflows/build-base.yml` is the reusable base build: it computes the base content tag, skips if that tag exists in `quay.io/guimou/codebox-base` (unless forced), otherwise builds `Dockerfile.base` and pushes `{tag}` and `latest`.
+- `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). It builds `Dockerfile` from the given base tag, pushes the image tagged `{version}`, `latest`, and the commit SHA, and, when given a `git_tag`, creates that git tag and GitHub Release in the same job.
 
 ## Architecture
 
-- **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox` (CI/CD published)
-- **Base**: `quay.io/fedora/fedora:44`
+- **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox` (CI/CD published), built on `quay.io/guimou/codebox-base`
+- **Base**: `quay.io/guimou/codebox-base` (built from `quay.io/fedora/fedora:44`)
 - **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **Mounts**:
   - Current directory → `/workspace`
