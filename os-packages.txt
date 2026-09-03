@@ -17,6 +17,9 @@ nano
 procps-ng
 vim-enhanced
 
+# Locales (en_* UTF-8 locales, avoids setlocale warnings when the host LANG is forwarded)
+glibc-langpack-en
+
 # Version control
 git
 gh
