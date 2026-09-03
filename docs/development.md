@@ -5,12 +5,12 @@
 | File | Description |
 |------|-------------|
 | `Dockerfile` | Container image definition (Fedora 44 base), parameterized by `HARNESS`/`HARNESS_VERSION` build args |
-| `lib/box-common.sh` | Shared launcher engine (sourced by all three launchers) |
-| `ccbox` / `ocbox` / `qcbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
-| `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` | Harness version pin files |
+| `lib/box-common.sh` | Shared launcher engine (sourced by all four launchers) |
+| `ccbox` / `ocbox` / `qcbox` / `cxbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
+| `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` | Harness version pin files |
 | `os-packages.txt` | DNF packages to install (one per line) |
 | `firewall-domains.txt` | Allowed network domains common to all harnesses |
-| `firewall-domains-{claude,opencode,qwencode}.txt` | Harness-specific allowed domains, concatenated with the common file at build time |
+| `firewall-domains-{claude,opencode,qwencode,codex}.txt` | Harness-specific allowed domains, concatenated with the common file at build time |
 | `init-firewall.sh` | Firewall initialization script (iptables/ipset) |
 | `.github/workflows/release.yml` | Release workflow (detects which harnesses to build) |
 | `.github/workflows/build-and-push.yml` | Reusable per-harness image build |
@@ -32,6 +32,7 @@ See [architecture.md](architecture.md) for how the Dockerfile, engine, and wrapp
 # Same for the other harnesses (each builds its own image from the shared Dockerfile)
 ./ocbox --build
 ./qcbox --build
+./cxbox --build
 ```
 
 Common image layers never reference the `HARNESS` build arg, so building a second harness locally reuses the shared layer cache.
@@ -69,7 +70,7 @@ DEBUG=1 ccbox
 Launchers and the engine are shellcheck-clean:
 
 ```bash
-shellcheck ccbox ocbox qcbox lib/box-common.sh init-firewall.sh
+shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh
 ```
 
 ## CI/CD
@@ -88,11 +89,11 @@ The `-N` suffix increments from existing `{box}-v{version}-*` tags. If the compu
 
 ### Build workflow (`build-and-push.yml`)
 
-Reusable workflow called by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode`) and optional version/tag overrides. It resolves the harness to its image repository and version file, then builds with `HARNESS` and `HARNESS_VERSION` build args. Build caches are scoped per harness (`type=gha,scope={harness}`).
+Reusable workflow called by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex`) and optional version/tag overrides. It resolves the harness to its image repository and version file, then builds with `HARNESS` and `HARNESS_VERSION` build args. Build caches are scoped per harness (`type=gha,scope={harness}`).
 
 ### Image tags
 
-Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`) with tags:
+Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox`) with tags:
 
 | Tag | Description |
 |-----|-------------|
@@ -103,7 +104,7 @@ Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guim
 ### Releasing a new harness version
 
 ```bash
-echo "2.1.37" > CLAUDE_VERSION      # or OPENCODE_VERSION / QWENCODE_VERSION
+echo "2.1.37" > CLAUDE_VERSION      # or OPENCODE_VERSION / QWENCODE_VERSION / CODEX_VERSION
 git add CLAUDE_VERSION
 git commit -m "chore: bump Claude Code version to 2.1.37"
 git push origin main
@@ -116,7 +117,7 @@ To enable CI/CD pushes, configure GitHub repository secrets:
 1. **Create a Quay.io robot account:**
    - Log in to [quay.io](https://quay.io) → Account Settings → Robot Accounts
    - Create a robot account (e.g., `github_actions`)
-   - Grant **Write** permission to the `guimou/ccbox`, `guimou/ocbox`, and `guimou/qcbox` repositories
+   - Grant **Write** permission to the `guimou/ccbox`, `guimou/ocbox`, `guimou/qcbox`, and `guimou/cxbox` repositories
 2. **Add GitHub secrets** (repository Settings → Secrets and variables → Actions):
 
    | Secret | Value |
@@ -129,4 +130,5 @@ To enable CI/CD pushes, configure GitHub repository secrets:
 ```bash
 podman pull quay.io/guimou/ccbox:latest
 podman pull quay.io/guimou/ocbox:<version>
+podman pull quay.io/guimou/cxbox:<version>
 ```

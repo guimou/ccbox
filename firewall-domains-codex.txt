@@ -1,0 +1,15 @@
+# Allowed domains for the firewall - Codex CLI specific
+
+# OpenAI API (model responses for API-key auth)
+api.openai.com
+
+# OpenAI OAuth (ChatGPT sign-in, device-code flow, token refresh)
+auth.openai.com
+
+# ChatGPT (OAuth, backend API, install script)
+chatgpt.com
+
+# Other supported providers (add yours if missing)
+openrouter.ai
+api.anthropic.com
+generativelanguage.googleapis.com

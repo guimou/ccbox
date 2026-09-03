@@ -8,6 +8,7 @@ on:
       - 'CLAUDE_VERSION'
       - 'OPENCODE_VERSION'
       - 'QWENCODE_VERSION'
+      - 'CODEX_VERSION'
       # Shared image/launcher files (affect all harnesses)
       - 'Dockerfile'
       - 'os-packages.txt'
@@ -18,9 +19,11 @@ on:
       - 'firewall-domains-claude.txt'
       - 'firewall-domains-opencode.txt'
       - 'firewall-domains-qwencode.txt'
+      - 'firewall-domains-codex.txt'
       - 'ccbox'
       - 'ocbox'
       - 'qcbox'
+      - 'cxbox'
 
 jobs:
   detect:
@@ -99,6 +102,7 @@ jobs:
           add_harness claude   ccbox CLAUDE_VERSION   ccbox firewall-domains-claude.txt
           add_harness opencode ocbox OPENCODE_VERSION ocbox firewall-domains-opencode.txt
           add_harness qwencode qcbox QWENCODE_VERSION qcbox firewall-domains-qwencode.txt
+          add_harness codex    cxbox CODEX_VERSION    cxbox firewall-domains-codex.txt
 
           echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
           if [ "$MATRIX" = "[]" ]; then

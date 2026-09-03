@@ -1,13 +1,14 @@
 # Containerized AI coding harness development environment
 # Based on Fedora 44
 #
-# One Dockerfile builds three images, selected via the HARNESS build arg:
+# One Dockerfile builds four images, selected via the HARNESS build arg:
 #   HARNESS=claude   -> ccbox (Claude Code)
 #   HARNESS=opencode -> ocbox (OpenCode)
 #   HARNESS=qwencode -> qcbox (Qwen Code)
+#   HARNESS=codex    -> cxbox (Codex CLI)
 #
 # All common layers come first and never reference HARNESS, so the build
-# cache is shared across the three images. Harness-specific layers are
+# cache is shared across the four images. Harness-specific layers are
 # grouped at the end.
 
 FROM quay.io/fedora/fedora:44
@@ -131,12 +132,13 @@ ENV PATH="/home/coder/.npm-global/bin:/home/coder/.local/bin:${PATH}"
 # Each harness only reads its own variable; setting all is harmless.
 ENV DISABLE_AUTOUPDATER=1
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
+ENV CODEX_DISABLE_AUTOUPDATE=1
 
 # ---------------------------------------------------------------------------
 # Harness-specific layers start here
 # ---------------------------------------------------------------------------
 
-# Which harness to install: claude | opencode | qwencode
+# Which harness to install: claude | opencode | qwencode | codex
 ARG HARNESS=claude
 # Harness version (empty = latest, or a specific version like "2.1.226")
 ARG HARNESS_VERSION=""
@@ -202,6 +204,12 @@ RUN set -eu; \
         mkdir -p /etc/qwen-code && \
         printf '%s\n' '{ "general": { "enableAutoUpdate": false }, "tools": { "sandbox": false } }' \
             > /etc/qwen-code/settings.json ;; \
+    codex) \
+        npm install -g "@openai/codex@${HARNESS_VERSION:-latest}" && \
+        mkdir -p /home/coder/.codex && \
+        # Empty credentials store (host auth.json is opt-in via --with-credentials)
+        echo '{}' > /home/coder/.codex/auth.json && \
+        chown -R coder:coder /home/coder/.codex ;; \
     *) echo "Unknown HARNESS: ${HARNESS}" >&2; exit 1 ;; \
     esac
 
