@@ -74,9 +74,9 @@ Two backends, selected once in `box_main`:
 | Fetch | `podman pull` | `apptainer pull <sif> docker://quay.io/guimou/<box>:<tag>` if the SIF is missing; `--pull` forces a refresh (needed for `latest`) |
 | Build | `podman build` | not supported, clear error (build on a host or in CI) |
 | Mounts | `-v h:c[:ro],z` | `--bind h:c[:ro]` |
-| Env | `-e` | `--cleanenv` + `--env` |
-| Isolation flags | `--userns=keep-id`, `--rm -it`, `--hostname` | `--no-home --no-mount tmp,cwd --pid --ipc --writable-tmpfs --pwd /workspace` |
-| Session listing | `podman ps --filter name=` | `pgrep -af` on the apptainer command line (SIF path + workspace); `apptainer instance` is the alternative if listing needs to be more robust |
+| Env | `-e` | `--cleanenv` + `APPTAINERENV_*` exports (`--env` splits values on commas) |
+| Isolation flags | `--userns=keep-id`, `--rm -it`, `--hostname` | `--userns --no-home --no-mount tmp,cwd --pid --ipc --writable-tmpfs --pwd /workspace`, plus `--bind $CODEBOX_SCRATCH_DIR/<session>:/tmp` when set |
+| Session listing | `podman ps --filter name=` | marker file per session under `$CODEBOX_STATE_DIR/sessions` (host + PID + start time; pruned when the PID is gone). Apptainer rewrites its own command line, so `pgrep` is not usable; `apptainer instance` remains the alternative |
 | Firewall | `--cap-add NET_ADMIN,NET_RAW` + init script | unsupported: `--with-firewall` errors and points to the namespace egress policy |
 | Clipboard, audio, npm-global | as today | skipped (no host) |
 | Timezone | bind `/etc/localtime` | bind `/etc/localtime` |
@@ -244,10 +244,13 @@ Plain YAML with a kustomization, one namespace per user:
    wrappers migrated, golden test (`tests/render-test.sh`) asserting the
    rendered `podman run` line is identical before and after for all four
    launchers, CI job for shellcheck + the test. Done on this branch.
-2. **Apptainer backend.** `lib/runtime_apptainer.sh`, `--runtime`, `--pull`,
-   `CODEBOX_RUNTIME` / `CODEBOX_SIF_DIR`, SIF fetch with atomic move,
-   session listing, firewall/clipboard/npm-global behavior, tests for the
-   rendered `apptainer exec` line, `docs/usage.md` additions.
+2. **Apptainer backend.** Apptainer section in `lib/box-common.sh`,
+   `--runtime`, `--pull`, `CODEBOX_RUNTIME` / `CODEBOX_STATE_DIR` /
+   `CODEBOX_SIF_DIR` / `CODEBOX_SCRATCH_DIR`, SIF fetch with atomic move,
+   session markers, firewall/clipboard/npm-global behavior, golden
+   scenarios for the rendered `apptainer exec` line, `docs/usage.md`
+   Runtimes section. Done on this branch; the gates below still have to be
+   run on a cluster once phase 3 provides the pod.
 3. **Pod image and manifests.** `k8s/Containerfile`, `k8s/*.yaml`,
    entrypoint, `apptainer.conf`, CI job for the pod image,
    `docs/kubernetes.md`, README and AGENTS.md updates. Run the gates above

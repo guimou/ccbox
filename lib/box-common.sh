@@ -35,15 +35,23 @@
 # The engine collects what a session needs in a runtime-neutral form: an
 # ordered list of bind mounts and environment variables (BOX_SPEC, filled by
 # add_mount / add_env), the image tag, and the command to run. A runtime
-# backend turns that into the actual command line. Today there is one
-# backend, podman (see "Runtime backend: podman" below); the interface is:
+# backend turns that into the actual command line. Two backends exist:
+#   podman     - rootless Podman on a workstation (the default when present)
+#   apptainer  - Apptainer running a SIF converted from the same OCI image,
+#                for a long-lived pod on Kubernetes/OpenShift where the pod
+#                plays the role of the host (see docs/kubernetes.md)
+# Selection: --runtime NAME, else $CODEBOX_RUNTIME, else podman if installed,
+# else apptainer if installed. The backend interface:
 #   rt_check          - the runtime is usable on this host (exit otherwise)
 #   rt_list_sessions  - implement --list-sessions
 #   rt_build_image    - implement --build / --build-base
 #   rt_resolve_image  - set IMAGE_REF for the requested tag (pull if needed)
-#   rt_render         - build RUN_ARGS (argv after the runtime's run verb)
+#   rt_render         - build RUN_ARGS (argv after the runtime binary)
 #                       from BOX_SPEC, the launch command and the flags
 #   rt_exec           - exec the runtime with RUN_ARGS
+# plus two capability flags set by select_runtime: RT_HOST_FEATURES (the
+# host has a desktop: clipboard, audio, npm-global are wired) and
+# RT_FIREWALL (the in-container firewall can be used).
 
 set -e
 
@@ -299,6 +307,8 @@ show_help() {
     echo "  --list-sessions          List active sessions for this project"
     echo "  --shell                  Start an interactive bash shell instead of ${HARNESS_CLI} (same mounts; for troubleshooting)"
     echo "  --install                Show installation instructions"
+    echo "  --runtime NAME           Container runtime: podman (default when installed) or apptainer"
+    echo "  --pull                   apptainer: re-pull the SIF even if one exists for this version"
     harness_extra_help
     echo "  -h, --help               Show this help message"
     echo ""
@@ -552,17 +562,202 @@ podman_rt_exec() {
     exec podman run "${RUN_ARGS[@]}"
 }
 
-# Bind the rt_* interface to the selected backend (podman is the only one
-# for now; BOX_RUNTIME names it for status output and future selection)
+# --- Runtime backend: apptainer ---------------------------------------------
+# Rootless Apptainer, typically inside a long-lived pod (the pod is the
+# "host": its filesystem holds the repos, the harness config and state, and
+# a shared store of SIF files converted from the registry images).
+#
+#   CODEBOX_STATE_DIR    launcher state (default ~/.codebox)
+#   CODEBOX_SIF_DIR      SIF store, may be shared by several pods
+#                        (default $CODEBOX_STATE_DIR/sifs)
+#   CODEBOX_SCRATCH_DIR  optional: when set, a per-session directory under it
+#                        is bound at /tmp inside the container, so heavy
+#                        writes land on disk instead of the RAM-backed
+#                        writable overlay (point it at a node-local volume)
+#
+# Isolation: Apptainer binds the caller's home, cwd and /tmp by default,
+# which is exactly what must not happen here (a session may only see its
+# repo and the state the launcher chooses). The backend therefore always
+# runs with --no-home, --no-mount tmp,cwd, --cleanenv and its own PID/IPC
+# namespaces, then binds the session spec explicitly. --contain is NOT used:
+# it would hide what the image ships in /home/coder. Environment variables
+# are passed as APPTAINERENV_* exports (survive --cleanenv, and unlike
+# --env are not split on commas).
+
+apptainer_rt_check() {
+    if ! command -v apptainer &> /dev/null; then
+        log_error "apptainer is not installed or not in PATH"
+        log_error "Install it (rootless package, not apptainer-suid) or use --runtime podman"
+        exit 1
+    fi
+    CODEBOX_STATE_DIR="${CODEBOX_STATE_DIR:-${HOME}/.codebox}"
+    CODEBOX_SIF_DIR="${CODEBOX_SIF_DIR:-${CODEBOX_STATE_DIR}/sifs}"
+    CODEBOX_SESSIONS_DIR="${CODEBOX_STATE_DIR}/sessions"
+    mkdir -p "$CODEBOX_SIF_DIR" "$CODEBOX_SESSIONS_DIR"
+}
+
+# Sessions are tracked with a marker file per launch (Apptainer rewrites its
+# own command line, so there is nothing to grep for). A marker names the
+# host and PID; it is stale once that PID is gone on this host. Markers from
+# another host (a second pod sharing the state dir) cannot be checked and
+# are listed as such.
+apptainer_rt_list_sessions() {
+    local base_name marker name host pid started
+    base_name=$(generate_container_name "$WORKSPACE_DIR")
+    printf '%-48s %-10s %s\n' "NAME" "STATUS" "STARTED"
+    for marker in "${CODEBOX_SESSIONS_DIR}/${base_name}"-*; do
+        [[ -f "$marker" ]] || continue
+        name=$(basename "$marker")
+        IFS=' ' read -r host pid started < "$marker"
+        if [[ "$host" != "$(hostname)" ]]; then
+            printf '%-48s %-10s %s\n' "$name" "other host" "$started ($host)"
+        elif [[ -d "/proc/${pid}" ]]; then
+            printf '%-48s %-10s %s\n' "$name" "running" "$started"
+        else
+            rm -f "$marker"
+        fi
+    done
+}
+
+apptainer_rt_build_image() {
+    log_error "--build is not available with the apptainer runtime"
+    log_error "Build and push the OCI image with podman (or let CI do it); the SIF is converted from it on first use"
+    exit 1
+}
+
+# The SIF for a tag lives at $CODEBOX_SIF_DIR/<box>-<tag>.sif. It is
+# converted from the registry image when missing (or with --pull), written
+# to a temporary name and moved into place so concurrent launchers never
+# see a partial file. The conversion unpacks the OCI layers under
+# APPTAINER_TMPDIR, which must be a node-local disk (network filesystems
+# fail on the hardlink-heavy unpack); only the finished SIF goes to the
+# (possibly shared) store.
+apptainer_rt_resolve_image() {
+    IMAGE_REF="${CODEBOX_SIF_DIR}/${BOX_NAME}-${IMAGE_TAG}.sif"
+    local source="docker://${FULL_REGISTRY_IMAGE}:${IMAGE_TAG}"
+
+    if [[ -f "$IMAGE_REF" ]] && ! $FORCE_PULL; then
+        log_info "Using SIF: ${IMAGE_REF}"
+        return
+    fi
+    if $USE_LOCAL; then
+        log_error "SIF not found: ${IMAGE_REF} (--local given, not pulling)"
+        exit 1
+    fi
+
+    local tmp="${IMAGE_REF}.$$.tmp"
+    log_info "Converting ${source} to ${IMAGE_REF} (first use of this version; this can take a few minutes)"
+    if ! apptainer pull --force "$tmp" "$source"; then
+        rm -f "$tmp"
+        log_error "Failed to pull ${source}"
+        exit 1
+    fi
+    mv -f "$tmp" "$IMAGE_REF"
+    log_info "SIF ready: ${IMAGE_REF}"
+}
+
+# Render BOX_SPEC + launch command into RUN_ARGS for `apptainer`, and export
+# the environment as APPTAINERENV_* variables
+apptainer_rt_render() {
+    # shellcheck disable=SC2054  # the comma is part of the --no-mount value
+    RUN_ARGS=(
+        exec
+        --userns
+        --no-home
+        --no-mount tmp,cwd
+        --pid
+        --ipc
+        --cleanenv
+        --writable-tmpfs
+        --pwd /workspace
+    )
+
+    # Per-session scratch bound at /tmp (optional, see the section comment)
+    if [[ -n "${CODEBOX_SCRATCH_DIR:-}" ]]; then
+        local scratch="${CODEBOX_SCRATCH_DIR}/${CONTAINER_NAME}"
+        mkdir -p "$scratch"
+        RUN_ARGS+=(--bind "${scratch}:/tmp")
+    fi
+
+    local entry kind a b c
+    for entry in "${BOX_SPEC[@]}"; do
+        IFS='|' read -r kind a b c <<< "$entry"
+        case "$kind" in
+            mount)
+                # nolabel is a Podman/SELinux concern; only "ro" matters here
+                if [[ ",${c}," == *,ro,* ]]; then
+                    RUN_ARGS+=(--bind "${a}:${b}:ro")
+                else
+                    RUN_ARGS+=(--bind "${a}:${b}")
+                fi
+                ;;
+            env)
+                export "APPTAINERENV_${a}=${b}"
+                ;;
+        esac
+    done
+    export "APPTAINERENV_CODEBOX_SESSION=${CONTAINER_NAME}"
+
+    if ! $NEEDS_SHELL; then
+        RUN_ARGS+=("$IMAGE_REF" "$HARNESS_CLI" "${EXTRA_ARGS[@]}")
+    else
+        RUN_ARGS+=("$IMAGE_REF" /bin/bash -c "${LAUNCH_CMD}")
+    fi
+}
+
+apptainer_rt_exec() {
+    # Session marker (see apptainer_rt_list_sessions). exec keeps our PID.
+    echo "$(hostname) $$ $(date '+%Y-%m-%d %H:%M:%S')" > "${CODEBOX_SESSIONS_DIR}/${CONTAINER_NAME}"
+
+    if [[ -n "${DEBUG}" ]]; then
+        echo "DEBUG: apptainer command:" >&2
+        env | grep '^APPTAINERENV_' | sort >&2
+        printf '%q ' apptainer "${RUN_ARGS[@]}" >&2
+        echo >&2
+    fi
+    exec apptainer "${RUN_ARGS[@]}"
+}
+
+# Pick the backend (see the header) and bind the rt_* interface to it
 select_runtime() {
-    # shellcheck disable=SC2034
-    BOX_RUNTIME="podman"
-    rt_check()         { podman_rt_check; }
-    rt_list_sessions() { podman_rt_list_sessions; }
-    rt_build_image()   { podman_rt_build_image; }
-    rt_resolve_image() { podman_rt_resolve_image; }
-    rt_render()        { podman_rt_render; }
-    rt_exec()          { podman_rt_exec; }
+    local runtime="${RUNTIME_OPT:-${CODEBOX_RUNTIME:-}}"
+    if [[ -z "$runtime" ]]; then
+        if command -v podman &> /dev/null; then
+            runtime="podman"
+        elif command -v apptainer &> /dev/null; then
+            runtime="apptainer"
+        else
+            runtime="podman"   # rt_check prints the install hints
+        fi
+    fi
+
+    case "$runtime" in
+        podman)
+            RT_HOST_FEATURES=true
+            RT_FIREWALL=true
+            rt_check()         { podman_rt_check; }
+            rt_list_sessions() { podman_rt_list_sessions; }
+            rt_build_image()   { podman_rt_build_image; }
+            rt_resolve_image() { podman_rt_resolve_image; }
+            rt_render()        { podman_rt_render; }
+            rt_exec()          { podman_rt_exec; }
+            ;;
+        apptainer)
+            RT_HOST_FEATURES=false
+            RT_FIREWALL=false
+            rt_check()         { apptainer_rt_check; }
+            rt_list_sessions() { apptainer_rt_list_sessions; }
+            rt_build_image()   { apptainer_rt_build_image; }
+            rt_resolve_image() { apptainer_rt_resolve_image; }
+            rt_render()        { apptainer_rt_render; }
+            rt_exec()          { apptainer_rt_exec; }
+            ;;
+        *)
+            log_error "Unknown runtime '${runtime}' (expected podman or apptainer)"
+            exit 1
+            ;;
+    esac
+    BOX_RUNTIME="$runtime"
 }
 
 # --- Host-side features (clipboard, audio, npm-global, GitHub token) --------
@@ -655,6 +850,8 @@ box_main() {
     SHOW_INSTALL=false
     HARNESS_VERSION=""
     NPM_GLOBAL=""
+    RUNTIME_OPT=""
+    FORCE_PULL=false
     EXTRA_ARGS=()
 
     while [[ $# -gt 0 ]]; do
@@ -739,6 +936,19 @@ box_main() {
             --with-gitconfig)
                 # shellcheck disable=SC2034  # read via add_optional_mount indirection
                 WITH_GITCONFIG=true
+                shift
+                ;;
+            --runtime)
+                RUNTIME_OPT="$2"
+                shift 2
+                ;;
+            --runtime=*)
+                RUNTIME_OPT="${1#*=}"
+                shift
+                ;;
+            --pull)
+                # shellcheck disable=SC2034  # read by the apptainer backend
+                FORCE_PULL=true
                 shift
                 ;;
             --)
@@ -827,7 +1037,7 @@ box_main() {
         add_env TZ "${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}"
 
         # PulseAudio socket for audio support
-        if [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+        if $RT_HOST_FEATURES && [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
             add_mount "${XDG_RUNTIME_DIR}/pulse/native" "${XDG_RUNTIME_DIR}/pulse/native"
             add_env PULSE_SERVER "unix:${XDG_RUNTIME_DIR}/pulse/native"
         fi
@@ -847,13 +1057,23 @@ box_main() {
         fi
     done
 
-    if ! $NO_CLIPBOARD; then
-        add_clipboard_mounts
+    # Desktop-host features: none of these exist when the "host" is a pod
+    if $RT_HOST_FEATURES; then
+        if ! $NO_CLIPBOARD; then
+            add_clipboard_mounts
+        fi
+        add_npm_global_mount
+    else
+        NO_CLIPBOARD=true
     fi
-    add_npm_global_mount
     add_github_token
 
-    # Firewall is Linux only
+    # Firewall is Linux only, and needs a runtime that can grant NET_ADMIN
+    if ! $NO_FIREWALL && ! $RT_FIREWALL; then
+        log_error "--with-firewall is not available with the ${BOX_RUNTIME} runtime"
+        log_error "Restrict egress at the pod/namespace level instead (see docs/kubernetes.md)"
+        exit 1
+    fi
     if ! $NO_FIREWALL && [[ "$OS_TYPE" != "linux" ]]; then
         log_warn "Firewall feature is only supported on Linux, ignoring --with-firewall flag"
         NO_FIREWALL=true
@@ -877,6 +1097,7 @@ box_main() {
     rt_render
 
     log_info "Starting ${HARNESS_TITLE} container..."
+    log_info "Runtime: ${BOX_RUNTIME}"
     log_info "Workspace: $WORKSPACE_DIR"
     log_info "Session: $SESSION_ID"
     log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"

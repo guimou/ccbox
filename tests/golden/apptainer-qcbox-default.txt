@@ -1,0 +1,29 @@
+--bind /etc/localtime:/etc/localtime:ro
+--bind ROOT/home/.qwen/.env:/home/coder/.qwen/.env:ro
+--bind ROOT/home/.qwen/QWEN.md:/home/coder/.qwen/QWEN.md
+--bind ROOT/home/.qwen/qcbox-projects/demo_HASH/file-history:/home/coder/.qwen/file-history
+--bind ROOT/home/.qwen/qcbox-projects/demo_HASH/projects:/home/coder/.qwen/projects
+--bind ROOT/home/.qwen/qcbox-projects/demo_HASH/tmp:/home/coder/.qwen/tmp
+--bind ROOT/home/.qwen/settings.json:/home/coder/.qwen/settings.json
+--bind ROOT/repos/demo:/workspace
+--cleanenv
+--env ANTHROPIC_API_KEY=anthropic-stub
+--env CODEBOX_SESSION=qcbox-demo-HASH-SESSION
+--env GH_TOKEN=ghp_stubtoken
+--env GITHUB_TOKEN=ghp_stubtoken
+--env LANG=C.UTF-8
+--env NO_COLOR=1
+--env OPENAI_API_KEY=openai-stub
+--env PROJECT_NAME=demo
+--env TERM=xterm-256color
+--env TZ=UTC
+--ipc
+--no-home
+--no-mount tmp,cwd
+--pid
+--pwd /workspace
+--userns
+--writable-tmpfs
+--
+ROOT/home/.codebox/sifs/qcbox-TAG.sif
+qwen

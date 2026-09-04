@@ -1,0 +1,54 @@
+--bind /etc/localtime:/etc/localtime:ro
+--bind ROOT/home/.claude.json:/home/coder/.claude.json
+--bind ROOT/home/.claude/CLAUDE.md:/home/coder/.claude/CLAUDE.md
+--bind ROOT/home/.claude/RULES.md:/home/coder/.claude/RULES.md:ro
+--bind ROOT/home/.claude/agents:/home/coder/.claude/agents
+--bind ROOT/home/.claude/backups:/home/coder/.claude/backups
+--bind ROOT/home/.claude/cache:/home/coder/.claude/cache
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/debug:/home/coder/.claude/debug
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/history.jsonl:/home/coder/.claude/history.jsonl
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/logs:/home/coder/.claude/logs
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/plans:/home/coder/.claude/plans
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/plugins:/home/coder/.claude/plugins
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/projects:/home/coder/.claude/projects
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/session-env:/home/coder/.claude/session-env
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/shell-snapshots:/home/coder/.claude/shell-snapshots
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/tasks:/home/coder/.claude/tasks
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/teams:/home/coder/.claude/teams
+--bind ROOT/home/.claude/ccbox-projects/demo_HASH/todos:/home/coder/.claude/todos
+--bind ROOT/home/.claude/commands:/home/coder/.claude/commands
+--bind ROOT/home/.claude/file-history:/home/coder/.claude/file-history
+--bind ROOT/home/.claude/hooks:/home/coder/.claude/hooks
+--bind ROOT/home/.claude/keybindings.json:/home/coder/.claude/keybindings.json
+--bind ROOT/home/.claude/paste-cache:/home/coder/.claude/paste-cache
+--bind ROOT/home/.claude/rules:/home/coder/.claude/rules
+--bind ROOT/home/.claude/settings.json:/home/coder/.claude/settings.json
+--bind ROOT/home/.claude/settings.local.json:/home/coder/.claude/settings.local.json
+--bind ROOT/home/.claude/skills:/home/coder/.claude/skills
+--bind ROOT/home/.claude/stats-cache.json:/home/coder/.claude/stats-cache.json
+--bind ROOT/home/.claude/statsig:/home/coder/.claude/statsig
+--bind ROOT/home/.claude/status-line.sh:/home/coder/.claude/status-line.sh:ro
+--bind ROOT/home/.claude/themes:/home/coder/.claude/themes
+--bind ROOT/home/.claude/workflows:/home/coder/.claude/workflows
+--bind ROOT/repos/demo:/workspace
+--cleanenv
+--env ANTHROPIC_API_KEY=anthropic-stub
+--env AWS_REGION=eu-west-1
+--env CODEBOX_SESSION=ccbox-demo-HASH-SESSION
+--env GH_TOKEN=ghp_stubtoken
+--env GITHUB_TOKEN=ghp_stubtoken
+--env LANG=C.UTF-8
+--env NO_COLOR=1
+--env PROJECT_NAME=demo
+--env TERM=xterm-256color
+--env TZ=UTC
+--ipc
+--no-home
+--no-mount tmp,cwd
+--pid
+--pwd /workspace
+--userns
+--writable-tmpfs
+--
+ROOT/home/.codebox/sifs/ccbox-TAG.sif
+claude

@@ -105,7 +105,7 @@ For local development, you can build the image locally:
 - `firewall-domains.txt` - Allowed network domains common to all harnesses (one per line)
 - `firewall-domains-{claude,opencode,qwencode,codex}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
-- `lib/box-common.sh` - Shared launcher engine (sourced by all four launchers): runtime-neutral session spec (`add_mount` / `add_env`) plus the Podman runtime backend that renders it into `podman run`
+- `lib/box-common.sh` - Shared launcher engine (sourced by all four launchers): runtime-neutral session spec (`add_mount` / `add_env`) plus two runtime backends that render it, Podman (`podman run`, workstation) and Apptainer (`apptainer exec` on a SIF, long-lived pod; selected with `--runtime` / `CODEBOX_RUNTIME`)
 - `tests/render-test.sh` + `tests/golden/` - Golden test of the rendered command line for every launcher (stub runtime; run it, and re-record when a change to mounts/env is intended)
 - `ccbox` / `ocbox` / `qcbox` / `cxbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
 - `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version` / `--codex-version`)
