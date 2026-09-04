@@ -22,11 +22,15 @@
 #     there (the hardlink-heavy unpack fails on NFS-class filesystems) and
 #     per-session /tmp directories live there too
 
-FROM registry.access.redhat.com/ubi9/ubi:latest
+# CentOS Stream 9 rather than UBI9: same RHEL 9 package universe, but the
+# UBI repositories do not carry tmux (nor does EPEL, since RHEL has it).
+FROM quay.io/centos/centos:stream9
 
 # EPEL provides apptainer (rootless package, NOT apptainer-suid) and the
-# FUSE helpers; the GitHub CLI comes from GitHub's own repository.
-RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+# FUSE helpers (some of their dependencies live in CRB); the GitHub CLI
+# comes from GitHub's own repository.
+RUN dnf install -y epel-release && \
+    dnf config-manager --set-enabled crb && \
     curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo && \
     dnf install -y \
         apptainer \
@@ -49,7 +53,7 @@ RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.n
         ca-certificates && \
     dnf clean all && \
     # Apptainer bind-mounts /etc/localtime into every container by default and
-    # stock UBI9 ships without it
+    # a minimal base may ship without it
     ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 
 # Apptainer configuration for the pod:
