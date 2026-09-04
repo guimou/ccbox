@@ -159,7 +159,7 @@ REGISTRY_BASE_IMAGE="quay.io/guimou/codebox-base:latest"
 # Generate a unique session identifier
 generate_session_id() {
     if [[ -f /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid | cut -c1-8
+        cut -c1-8 < /proc/sys/kernel/random/uuid
     else
         # macOS fallback
         uuidgen | tr '[:upper:]' '[:lower:]' | cut -c1-8
