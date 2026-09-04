@@ -1,0 +1,80 @@
+# One long-lived coding pod. Scale to 0 to stop it, back to 1 to resume;
+# everything that matters is on the PVC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codebox
+  labels:
+    app.kubernetes.io/name: codebox
+spec:
+  replicas: 1
+  # A single pod owns the home directory; never run two during a rollout
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: codebox
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: codebox
+      annotations:
+        # Exposes /dev/fuse in the container (OpenShift 4.15+, CRI-O), so
+        # Apptainer can run the SIF in place through squashfuse
+        io.kubernetes.cri-o.Devices: /dev/fuse
+    spec:
+      serviceAccountName: codebox
+      # Nothing in the pod talks to the API; do not hand the harness a token
+      automountServiceAccountToken: false
+      # NO hostUsers: false here (see k8s/cluster/scc.yaml)
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: Unconfined
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: codebox
+          image: quay.io/guimou/codebox-pod:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          # Env-var based secrets (GH_TOKEN, provider API keys). Optional:
+          # the launchers forward them like host env vars. File-based
+          # credentials live in the home directory on the PVC instead.
+          envFrom:
+            - secretRef:
+                name: codebox-env
+                optional: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              ephemeral-storage: 20Gi
+            limits:
+              memory: 16Gi
+              ephemeral-storage: 40Gi
+          volumeMounts:
+            - name: home
+              mountPath: /home/coder
+            - name: scratch
+              mountPath: /scratch
+          # The entrypoint idles; consider the pod ready once it is up
+          readinessProbe:
+            exec:
+              command: [test, -d, /home/coder/repos]
+            initialDelaySeconds: 5
+            periodSeconds: 30
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: codebox-home
+        - name: scratch
+          # Node-local disk (NOT medium: Memory): the OCI -> SIF conversion
+          # unpacks a multi-GB image here, and per-session /tmp dirs live
+          # here. Sized for one unpacked harness image plus session scratch.
+          emptyDir:
+            sizeLimit: 30Gi

@@ -1,0 +1,44 @@
+# Example overlay: copy this directory, then set the namespace, the RWX
+# storage class and the size, and (optionally) the env-var secrets.
+#
+#   cp -r k8s/overlays/example k8s/overlays/mine
+#   $EDITOR k8s/overlays/mine/kustomization.yaml
+#   oc new-project codebox-<you>
+#   oc apply -k k8s/overlays/mine
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: codebox-me
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: codebox-home
+    patch: |
+      - op: replace
+        path: /spec/storageClassName
+        value: ocs-storagecluster-cephfs     # any RWX class: efs-sc, nfs-csi, ...
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 100Gi
+  # Image tag to run (latest by default)
+  - target:
+      kind: Deployment
+      name: codebox
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: quay.io/guimou/codebox-pod:latest
+
+# Env-var secrets forwarded into every session by the launchers (GH_TOKEN,
+# ANTHROPIC_API_KEY, ...). Optional: the Deployment references the secret as
+# optional, so leave this commented out to run without. To enable, copy
+# codebox.env.example to codebox.env (git-ignored), fill it in, uncomment:
+#
+# secretGenerator:
+#   - name: codebox-env
+#     envs:
+#       - codebox.env
+#     options:
+#       disableNameSuffixHash: true

@@ -219,7 +219,7 @@ Plain YAML with a kustomization, one namespace per user:
 - `docs/usage.md` — `--runtime`, `--pull`, and the `CODEBOX_*` env vars.
 - `AGENTS.md` — file structure and the runtime backend note.
 
-## Gates to run on a live cluster before phase 2 is finalized
+## Gates to run on a live cluster (next step, after phases 1-3)
 
 1. Pod admitted under the custom SCC as UID 1000 with `/dev/fuse` present and
    `Seccomp: 0`; `unshare --user --map-root-user id` works (spike Gate 1).
@@ -251,10 +251,13 @@ Plain YAML with a kustomization, one namespace per user:
    scenarios for the rendered `apptainer exec` line, `docs/usage.md`
    Runtimes section. Done on this branch; the gates below still have to be
    run on a cluster once phase 3 provides the pod.
-3. **Pod image and manifests.** `k8s/Containerfile`, `k8s/*.yaml`,
-   entrypoint, `apptainer.conf`, CI job for the pod image,
-   `docs/kubernetes.md`, README and AGENTS.md updates. Run the gates above
-   and fold the findings back into phase 2 details.
+3. **Pod image and manifests.** `k8s/Containerfile` (UBI9), `k8s/entrypoint.sh`,
+   `apptainer.conf` tweaks baked in the image, `k8s/cluster/` (SCC +
+   ClusterRole), `k8s/base/` + `k8s/overlays/example/` (kustomize),
+   `k8s/gen-egress-firewall.sh`, `build-pod.yml` CI job, `docs/kubernetes.md`,
+   README and AGENTS.md updates. Done on this branch, unverified on a
+   cluster: run the gates above next and fold the findings back into the
+   backend and the docs.
 4. **Optional follow-ups.** Egress firewall generator, SIF publishing via
    ORAS, `apptainer instance` based session listing, Secret-mounted
    credential files instead of files on the PVC.

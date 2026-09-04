@@ -1,0 +1,94 @@
+# codebox-pod: the slim image a long-lived coding pod runs on Kubernetes /
+# OpenShift. The pod plays the role of the workstation: you rsh into it,
+# cd into a repo under ~/repos and run ccbox / ocbox / qcbox / cxbox exactly
+# as on a host. The launchers then start the harness with Apptainer from a
+# SIF converted from the regular quay.io/guimou/<box> image.
+#
+# Nothing development-related is installed here: every tool the harness may
+# need lives in the harness image (hence in the SIF). This image only holds
+# Apptainer, tmux, git/gh for convenience in the pod shell, and the launchers.
+#
+# Build from the repository root (the launchers are copied in):
+#   podman build -f k8s/Containerfile -t codebox-pod .
+#
+# Runtime requirements (see docs/kubernetes.md and k8s/base/deployment.yaml):
+#   - seccompProfile Unconfined and the io.kubernetes.cri-o.Devices=/dev/fuse
+#     annotation, granted by the SCC in k8s/cluster/
+#   - NO hostUsers: false (pod-level user namespaces need idmapped mounts,
+#     which network RWX filesystems cannot provide); Apptainer creates its
+#     own user namespace instead
+#   - runs as UID 1000 (coder), the UID the harness images are built for
+#   - a node-local emptyDir at /scratch: SIF conversion unpacks OCI layers
+#     there (the hardlink-heavy unpack fails on NFS-class filesystems) and
+#     per-session /tmp directories live there too
+
+FROM registry.access.redhat.com/ubi9/ubi:latest
+
+# EPEL provides apptainer (rootless package, NOT apptainer-suid) and the
+# FUSE helpers; the GitHub CLI comes from GitHub's own repository.
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo && \
+    dnf install -y \
+        apptainer \
+        fuse-overlayfs \
+        squashfuse \
+        fuse3 \
+        shadow-utils \
+        procps-ng \
+        hostname \
+        iproute \
+        tmux \
+        git \
+        gh \
+        jq \
+        vim-minimal \
+        less \
+        openssh-clients \
+        bind-utils \
+        tzdata \
+        ca-certificates && \
+    dnf clean all && \
+    # Apptainer bind-mounts /etc/localtime into every container by default and
+    # stock UBI9 ships without it
+    ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
+
+# Apptainer configuration for the pod:
+#   - sessiondir max size: the writable overlay (--writable-tmpfs) every
+#     session gets for paths that are not bound; the 64 MB default is too
+#     small for plugin installs and caches
+#   - mount home/tmp: off by default too (the launcher passes --no-home and
+#     --no-mount tmp,cwd anyway; belt and braces for manual apptainer runs)
+RUN sed -i \
+        -e 's/^sessiondir max size = .*/sessiondir max size = 4096/' \
+        -e 's/^mount home = .*/mount home = no/' \
+        -e 's/^mount tmp = .*/mount tmp = no/' \
+        /etc/apptainer/apptainer.conf && \
+    grep -E '^(sessiondir max size|mount home|mount tmp) =' /etc/apptainer/apptainer.conf
+
+# coder / UID 1000: the user the harness images are built for. The home
+# directory is the RWX PVC at runtime (mounted over /home/coder), so nothing
+# baked here survives; entrypoint.sh creates the skeleton on first start.
+RUN groupadd -g 1000 coder && \
+    useradd -u 1000 -g 1000 -m -d /home/coder -s /bin/bash coder && \
+    mkdir -p /scratch && chown coder:coder /scratch
+
+# Launchers and the shared engine, flat layout (box-common.sh next to the
+# launchers, as for a ~/.local/bin install)
+COPY ccbox ocbox qcbox cxbox lib/box-common.sh k8s/entrypoint.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/ccbox /usr/local/bin/ocbox /usr/local/bin/qcbox /usr/local/bin/cxbox \
+               /usr/local/bin/box-common.sh /usr/local/bin/entrypoint.sh
+
+ENV HOME=/home/coder \
+    CODEBOX_RUNTIME=apptainer \
+    CODEBOX_STATE_DIR=/home/coder/.codebox \
+    CODEBOX_SIF_DIR=/home/coder/.codebox/sifs \
+    CODEBOX_SCRATCH_DIR=/scratch/sessions \
+    APPTAINER_TMPDIR=/scratch/apptainer/tmp \
+    APPTAINER_CACHEDIR=/scratch/apptainer/cache \
+    TZ=UTC \
+    LANG=C.UTF-8
+
+USER 1000
+WORKDIR /home/coder
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

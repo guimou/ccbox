@@ -1,0 +1,7 @@
+# Cluster-scoped objects, applied once by a cluster-admin:
+#   oc apply -k k8s/cluster
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - scc.yaml
+  - clusterrole.yaml

@@ -100,6 +100,10 @@ API keys and provider settings are forwarded from host environment variables (e.
 
 Note this does **not** cover the always-mounted main config (`~/.claude/settings.json`, `~/.config/opencode/opencode.json`, `~/.qwen/settings.json`, `~/.codex/config.toml`): any key stored in those is passed regardless of `--with-credentials`. GitHub token injection (`GH_TOKEN`) is unaffected.
 
+## Kubernetes / OpenShift
+
+The same launchers run inside a long-lived pod, with the pod playing the role of your workstation: rsh in, `cd ~/repos/<repo>`, run `ccbox`. The harness starts through Apptainer from a SIF converted from the same image, with the same per-project isolation. See [docs/kubernetes.md](docs/kubernetes.md).
+
 ## Documentation
 
 | Document | Contents |
@@ -107,6 +111,7 @@ Note this does **not** cover the always-mounted main config (`~/.claude/settings
 | [docs/usage.md](docs/usage.md) | All flags, provider configuration, GitHub auth, version pinning, firewall, clipboard, agent teams, platform notes, included tools |
 | [docs/architecture.md](docs/architecture.md) | How images, launchers, mounts, and per-project isolation work; what data lives where for each harness |
 | [docs/development.md](docs/development.md) | Building locally, adding packages/domains, CI/CD and release process |
+| [docs/kubernetes.md](docs/kubernetes.md) | Running the launchers in a long-lived pod on Kubernetes/OpenShift (Apptainer runtime, RWX volume, SCC, egress policy) |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 

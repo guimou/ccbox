@@ -18,6 +18,8 @@
 | `.github/workflows/build-base.yml` | Reusable base image build (content-tagged, skipped when the tag exists) |
 | `.github/workflows/build-and-push.yml` | Reusable per-harness image build, tag and GitHub Release |
 | `.github/workflows/tests.yml` | shellcheck + golden test of the launchers on pull requests and pushes |
+| `.github/workflows/build-pod.yml` | Builds and pushes the Kubernetes pod image `quay.io/guimou/codebox-pod` from `k8s/Containerfile` |
+| `k8s/` | Kubernetes/OpenShift deployment: pod image, SCC, kustomize base and example overlay, egress firewall generator (see [kubernetes.md](kubernetes.md)) |
 
 See [architecture.md](architecture.md) for how the base image, harness Dockerfile, engine, and wrappers fit together.
 
@@ -83,8 +85,10 @@ DEBUG=1 ccbox
 Launchers, the engine and the test script are shellcheck-clean:
 
 ```bash
-shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh
+shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
 ```
+
+The kustomizations render without a cluster: `kubectl kustomize k8s/overlays/example` and `kubectl kustomize k8s/cluster`.
 
 The golden test runs every launcher with a set of flags against stub `podman`, `gh` and `npm` commands in a throwaway home directory, and compares the rendered `podman run` argument list with `tests/golden/*.txt` (flag/value pairs sorted, image and command kept in order; the temp root, session id, project hash and image tag are normalized). It needs no container runtime and runs in CI (`tests.yml`):
 

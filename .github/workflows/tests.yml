@@ -12,6 +12,7 @@ on:
       - 'lib/**'
       - 'tests/**'
       - 'init-firewall.sh'
+      - 'k8s/**'
       - '.github/workflows/tests.yml'
 
 permissions:
@@ -25,7 +26,15 @@ jobs:
         uses: actions/checkout@v7
 
       - name: shellcheck
-        run: shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh
+        run: shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
+
+      - name: Render the kustomizations
+        run: |
+          kubectl kustomize k8s/overlays/example > /dev/null
+          kubectl kustomize k8s/cluster > /dev/null
+
+      - name: Egress firewall generator
+        run: k8s/gen-egress-firewall.sh | grep -q 'dnsName: api.anthropic.com'
 
       - name: Golden test of the rendered command line
         run: tests/render-test.sh
