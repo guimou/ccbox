@@ -19,6 +19,7 @@
 -v ROOT/home/.claude.json:/home/coder/.claude.json:z
 -v ROOT/home/.claude/.credentials.json:/home/coder/.claude/.credentials.json:z
 -v ROOT/home/.claude/CLAUDE.md:/home/coder/.claude/CLAUDE.md:z
+-v ROOT/home/.claude/RULES.md:/home/coder/.claude/RULES.md:ro,z
 -v ROOT/home/.claude/agents:/home/coder/.claude/agents:z
 -v ROOT/home/.claude/backups:/home/coder/.claude/backups:z
 -v ROOT/home/.claude/cache:/home/coder/.claude/cache:z
@@ -44,6 +45,7 @@
 -v ROOT/home/.claude/skills:/home/coder/.claude/skills:z
 -v ROOT/home/.claude/stats-cache.json:/home/coder/.claude/stats-cache.json:z
 -v ROOT/home/.claude/statsig:/home/coder/.claude/statsig:z
+-v ROOT/home/.claude/status-line.sh:/home/coder/.claude/status-line.sh:ro,z
 -v ROOT/home/.claude/themes:/home/coder/.claude/themes:z
 -v ROOT/home/.claude/workflows:/home/coder/.claude/workflows:z
 -v ROOT/home/.config/gcloud:/home/coder/.config/gcloud:ro,z

@@ -56,9 +56,9 @@ rendered as `--bind` / `--env` for `apptainer exec`.
 
 Introduce a runtime-neutral model:
 
-- `add_mount HOST CONTAINER [OPTS]` appends to a `MOUNTS` array
-  (`host|container|opts`). `OPTS` is `ro` or empty.
-- `add_env NAME VALUE` appends to an `ENVS` array.
+- `add_mount HOST CONTAINER [OPTS]` appends a mount entry to the ordered
+  `BOX_SPEC` array. `OPTS` is a comma list of `ro` and `nolabel`, or empty.
+- `add_env NAME VALUE` appends an env entry to the same array.
 - `add_optional_mount` keeps its signature and calls `add_mount`.
 - Wrappers replace every `PODMAN_ARGS+=(-v ...)` / `PODMAN_ARGS+=(-e ...)`
   with `add_mount` / `add_env`. Nothing else in the wrappers changes.
@@ -82,16 +82,24 @@ Two backends, selected once in `box_main`:
 | Timezone | bind `/etc/localtime` | bind `/etc/localtime` |
 | GitHub token | host `gh auth token` | same code path: `GH_TOKEN` env in the pod (from a Secret) makes `gh auth status` succeed |
 
-Backend functions (`runtime_podman.sh`, `runtime_apptainer.sh` under `lib/`,
-sourced by `box-common.sh`; the flat-install layout copies them next to the
-launcher like `box-common.sh` today):
+Backend functions. Both backends live in `lib/box-common.sh` as marked
+sections (not separate files), so the documented two-file flat install
+(launcher + `box-common.sh`) stays valid. `select_runtime` binds the `rt_*`
+names to one backend's implementation:
 
 - `rt_check` — the runtime binary exists, print install hints.
-- `rt_resolve_image TAG` — sets `IMAGE_REF`, pulls or converts as needed.
+- `rt_build_image` — `--build` / `--build-base` (Podman only).
+- `rt_resolve_image` — sets `IMAGE_REF` for `IMAGE_TAG`, pulls or converts
+  as needed.
 - `rt_list_sessions` — for `--list-sessions`.
-- `rt_render` — turns `MOUNTS`, `ENVS`, `LAUNCH_CMD`, `NEEDS_SHELL` into the
-  final argv.
+- `rt_render` — turns `BOX_SPEC`, `LAUNCH_CMD`, `NEEDS_SHELL` and the flags
+  into `RUN_ARGS`.
 - `rt_exec` — `exec podman run ...` or `exec apptainer exec ...`.
+
+Phase 1 implemented this with a single ordered `BOX_SPEC` array of
+`mount|HOST|CONTAINER|OPTS` and `env|NAME|VALUE` entries (instead of two
+arrays) so relative order is preserved, plus a `nolabel` mount option for
+system paths that must not be SELinux-relabeled (sockets, `/etc/localtime`).
 
 `DEBUG=1` keeps printing the final command. That is also the test hook: a
 stub `podman`/`apptainer` on PATH plus `DEBUG=1` lets CI assert the rendered
@@ -232,9 +240,10 @@ Plain YAML with a kustomization, one namespace per user:
 ## Phases / pull requests
 
 1. **Refactor the launcher engine to the runtime-neutral model** (no behavior
-   change). `add_mount` / `add_env`, `MOUNTS` / `ENVS`, `lib/runtime_podman.sh`,
-   wrappers migrated, shell tests asserting the rendered `podman run` line is
-   identical before and after for all four launchers.
+   change). `add_mount` / `add_env`, `BOX_SPEC`, Podman backend section,
+   wrappers migrated, golden test (`tests/render-test.sh`) asserting the
+   rendered `podman run` line is identical before and after for all four
+   launchers, CI job for shellcheck + the test. Done on this branch.
 2. **Apptainer backend.** `lib/runtime_apptainer.sh`, `--runtime`, `--pull`,
    `CODEBOX_RUNTIME` / `CODEBOX_SIF_DIR`, SIF fetch with atomic move,
    session listing, firewall/clipboard/npm-global behavior, tests for the

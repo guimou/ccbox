@@ -89,14 +89,12 @@ harness_setup_project() {
 }
 
 harness_mounts() {
-    PODMAN_ARGS+=(
-        # Global config: opencode.json, agents, commands, plugins, themes (shared)
-        -v "${OPENCODE_CONFIG_DIR}:/home/coder/.config/opencode$(vol_flag "")"
-        # Data dir isolated per project (sessions, storage, logs)
-        -v "${PROJECT_DATA_DIR}/data:/home/coder/.local/share/opencode$(vol_flag "")"
-        # Cache shared across projects (provider packages, LSP binaries)
-        -v "${OPENCODE_CACHE_DIR}:/home/coder/.cache/opencode$(vol_flag "")"
-    )
+    # Global config: opencode.json, agents, commands, plugins, themes (shared)
+    add_mount "$OPENCODE_CONFIG_DIR"       /home/coder/.config/opencode
+    # Data dir isolated per project (sessions, storage, logs)
+    add_mount "${PROJECT_DATA_DIR}/data"   /home/coder/.local/share/opencode
+    # Cache shared across projects (provider packages, LSP binaries)
+    add_mount "$OPENCODE_CACHE_DIR"        /home/coder/.cache/opencode
 
     # Provider credentials (opt-in via --with-credentials, read-write).
     # Mounted over the per-project data dir so credentials stay shared.

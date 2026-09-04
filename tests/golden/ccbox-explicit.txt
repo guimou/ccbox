@@ -4,6 +4,8 @@
 --userns=keep-id:uid=1000,gid=1000
 -e ANTHROPIC_API_KEY=anthropic-stub
 -e AWS_REGION=eu-west-1
+-e GH_TOKEN=ghp_explicit
+-e GITHUB_TOKEN=ghp_explicit
 -e LANG=C.UTF-8
 -e NO_COLOR=1
 -e PROJECT_NAME=demo
@@ -46,5 +48,5 @@
 -v ROOT/repos/demo:/workspace:z
 -w /workspace
 --
-quay.io/guimou/ccbox:TAG
+ccbox:TAG
 claude

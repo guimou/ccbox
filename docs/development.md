@@ -6,7 +6,8 @@
 |------|-------------|
 | `Dockerfile.base` | Harness-independent base image (Fedora 44, OS packages, runtimes, tools), published as `quay.io/guimou/codebox-base` |
 | `Dockerfile` | Harness image built `FROM ${BASE_IMAGE}`, parameterized by `HARNESS`/`HARNESS_VERSION` build args |
-| `lib/box-common.sh` | Shared launcher engine (sourced by all four launchers) |
+| `lib/box-common.sh` | Shared launcher engine (sourced by all four launchers): runtime-neutral session spec plus the Podman runtime backend |
+| `tests/render-test.sh` + `tests/golden/` | Golden test of the rendered `podman run` command line for every launcher (stub runtime, no container needed) |
 | `ccbox` / `ocbox` / `qcbox` / `cxbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
 | `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` | Harness version pin files |
 | `os-packages.txt` | DNF packages to install (one per line) |
@@ -16,6 +17,7 @@
 | `.github/workflows/release.yml` | Release workflow (detects which harnesses to build, builds the base once, then one job per harness) |
 | `.github/workflows/build-base.yml` | Reusable base image build (content-tagged, skipped when the tag exists) |
 | `.github/workflows/build-and-push.yml` | Reusable per-harness image build, tag and GitHub Release |
+| `.github/workflows/tests.yml` | shellcheck + golden test of the launchers on pull requests and pushes |
 
 See [architecture.md](architecture.md) for how the base image, harness Dockerfile, engine, and wrappers fit together.
 
@@ -76,13 +78,22 @@ Set `DEBUG=1` to print the full podman command before execution:
 DEBUG=1 ccbox
 ```
 
-## Linting
+## Linting and Tests
 
-Launchers and the engine are shellcheck-clean:
+Launchers, the engine and the test script are shellcheck-clean:
 
 ```bash
-shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh
+shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh
 ```
+
+The golden test runs every launcher with a set of flags against stub `podman`, `gh` and `npm` commands in a throwaway home directory, and compares the rendered `podman run` argument list with `tests/golden/*.txt` (flag/value pairs sorted, image and command kept in order; the temp root, session id, project hash and image tag are normalized). It needs no container runtime and runs in CI (`tests.yml`):
+
+```bash
+tests/render-test.sh            # check
+tests/render-test.sh record     # re-record after an intentional change, then review the diff
+```
+
+When you add a mount or environment variable to the engine or a wrapper, the golden files change: re-record them and include the diff in your pull request so the reviewer sees exactly what the container now gets.
 
 ## CI/CD
 

@@ -20,13 +20,30 @@
 #   harness_ensure_config   - create host-side global config files/dirs
 #   harness_setup_project   - create host-side per-project dirs (PROJECT_KEY
 #                             and WORKSPACE_DIR are set when this is called)
-#   harness_mounts          - append harness mounts/env to PODMAN_ARGS
-#   harness_pre_run         - last-minute adjustments before launch; may set
-#                             LAUNCH_CMD (shell command string) and
-#                             NEEDS_SHELL=true to run via bash -c
+#   harness_mounts          - declare harness mounts/env with add_mount,
+#                             add_optional_mount and add_env
+#   harness_pre_run         - last-minute adjustments before launch; may call
+#                             add_env, edit EXTRA_ARGS, and set LAUNCH_CMD
+#                             (shell command string) plus NEEDS_SHELL=true to
+#                             run via bash -c
 #   harness_log_status      - print extra harness-specific status lines
 #
 # The wrapper must call box_main "$@" after sourcing this file.
+#
+# Runtime backends
+# ----------------
+# The engine collects what a session needs in a runtime-neutral form: an
+# ordered list of bind mounts and environment variables (BOX_SPEC, filled by
+# add_mount / add_env), the image tag, and the command to run. A runtime
+# backend turns that into the actual command line. Today there is one
+# backend, podman (see "Runtime backend: podman" below); the interface is:
+#   rt_check          - the runtime is usable on this host (exit otherwise)
+#   rt_list_sessions  - implement --list-sessions
+#   rt_build_image    - implement --build / --build-base
+#   rt_resolve_image  - set IMAGE_REF for the requested tag (pull if needed)
+#   rt_render         - build RUN_ARGS (argv after the runtime's run verb)
+#                       from BOX_SPEC, the launch command and the flags
+#   rt_exec           - exec the runtime with RUN_ARGS
 
 set -e
 
@@ -41,20 +58,26 @@ detect_os() {
 
 OS_TYPE=$(detect_os)
 
-# Volume flag helper - adds :z for SELinux relabeling on Linux
-# On macOS, Podman VM uses virtiofs which doesn't support SELinux labels
-vol_flag() {
-    local opts="$1"
-    # shellcheck disable=SC2015
-    [[ "$OS_TYPE" == "linux" ]] && local label="z" || local label=""
+# --- Runtime-neutral session spec ------------------------------------------
 
-    if [[ -n "$opts" && -n "$label" ]]; then
-        echo ":${opts},${label}"
-    elif [[ -n "$label" ]]; then
-        echo ":${label}"
-    elif [[ -n "$opts" ]]; then
-        echo ":${opts}"
-    fi
+# Ordered list of "mount|HOST|CONTAINER|OPTS" and "env|NAME|VALUE" entries.
+# Order is preserved so that later entries override earlier ones the way the
+# runtime would apply them (a file mounted over a directory mount, an env var
+# set twice).
+BOX_SPEC=()
+
+# Bind-mount $1 (host path) at $2 (container path). $3 is a comma-separated
+# list of options, empty (or omitted) for a plain read-write mount:
+#   ro       read-only
+#   nolabel  shared system path (socket, /etc file): the backend must not
+#            SELinux-relabel it, since that would affect the host
+add_mount() {
+    BOX_SPEC+=("mount|$1|$2|${3:-}")
+}
+
+# Set environment variable $1 to $2 inside the container.
+add_env() {
+    BOX_SPEC+=("env|$1|$2")
 }
 
 # Status lines for opt-in mounts added via add_optional_mount, printed by
@@ -62,10 +85,10 @@ vol_flag() {
 OPTIONAL_MOUNT_STATUS=()
 
 # Opt-in mount helper: if the flag named by $1 is set, mount $2 (host path)
-# at $3 (container path) with $4 as mount opts (e.g. "ro"), appending to
-# PODMAN_ARGS via vol_flag. If the host path is missing, warn and reset the
-# flag to false (the summary then reports the mount as not mounted). A host
-# path ending in "/" is expected to be a directory, any other path a file.
+# at $3 (container path) with $4 as mount opts (e.g. "ro"). If the host path
+# is missing, warn and reset the flag to false (the summary then reports the
+# mount as not mounted). A host path ending in "/" is expected to be a
+# directory, any other path a file.
 # Pass "force_mount" as $5 for paths that are guaranteed to exist (created
 # earlier, e.g. by harness_ensure_config). When the flag was set, records a
 # status line in OPTIONAL_MOUNT_STATUS for the launch summary:
@@ -102,7 +125,7 @@ add_optional_mount() {
     fi
 
     if $exists; then
-        PODMAN_ARGS+=(-v "${path}:${container_path}$(vol_flag "$opts")")
+        add_mount "$path" "$container_path" "$opts"
         if [[ "$no_status" != no_status ]]; then
             OPTIONAL_MOUNT_STATUS+=("${status_label}: mounted${mounted_suffix}")
         fi
@@ -316,6 +339,50 @@ determine_image_tag() {
     echo "$tag"
 }
 
+# --- Runtime backend: podman ------------------------------------------------
+# Rootless Podman on a workstation (Linux or macOS with a Podman machine).
+
+# Volume flag helper - adds :z for SELinux relabeling on Linux
+# On macOS, Podman VM uses virtiofs which doesn't support SELinux labels
+vol_flag() {
+    local opts="$1"
+    # shellcheck disable=SC2015
+    [[ "$OS_TYPE" == "linux" ]] && local label="z" || local label=""
+
+    if [[ -n "$opts" && -n "$label" ]]; then
+        echo ":${opts},${label}"
+    elif [[ -n "$label" ]]; then
+        echo ":${label}"
+    elif [[ -n "$opts" ]]; then
+        echo ":${opts}"
+    fi
+}
+
+podman_rt_check() {
+    if ! command -v podman &> /dev/null; then
+        log_error "podman is not installed or not in PATH"
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            log_error "Install Podman Desktop from: https://podman-desktop.io/downloads"
+            log_error "Or install via Homebrew: brew install podman"
+        fi
+        exit 1
+    fi
+
+    # On macOS, check if podman machine is running
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        if ! podman machine list 2>/dev/null | grep -q "Currently running"; then
+            log_warn "Podman machine might not be running"
+            log_info "Start it with: podman machine start"
+        fi
+    fi
+}
+
+podman_rt_list_sessions() {
+    local base_name
+    base_name=$(generate_container_name "$WORKSPACE_DIR")
+    podman ps --filter "name=^${base_name}" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"
+}
+
 # Pull image from registry
 pull_image() {
     local image_ref="$1"
@@ -365,7 +432,7 @@ resolve_base_image() {
 }
 
 # Build image locally
-build_image() {
+podman_rt_build_image() {
     if [[ ! -f "${SCRIPT_DIR}/Dockerfile" ]]; then
         log_error "No Dockerfile found in ${SCRIPT_DIR}"
         log_error "Building locally requires a clone of the repository:"
@@ -399,6 +466,177 @@ build_image() {
 
     log_info "Image built successfully: $full_tag"
 }
+
+# Set IMAGE_REF for IMAGE_TAG: a locally built image (--local, or an ARM64
+# one found on macOS) or the registry image, pulled now.
+podman_rt_resolve_image() {
+    # On macOS, auto-detect and prefer local ARM64 image to avoid x86 emulation
+    if [[ "$OS_TYPE" == "macos" ]] && ! $USE_LOCAL && podman image exists "${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"; then
+        log_info "Found local ARM64 image, using it to avoid emulation"
+        USE_LOCAL=true
+    fi
+
+    if $USE_LOCAL; then
+        # Local mode: use locally-built image
+        IMAGE_REF="${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"
+        if ! podman image exists "$IMAGE_REF"; then
+            log_error "Local image '$IMAGE_REF' not found"
+            log_error "Build it with: ${BOX_NAME} --build"
+            exit 1
+        fi
+        log_info "Using local image: $IMAGE_REF"
+    else
+        # Registry mode: pull from quay.io
+        IMAGE_REF="${FULL_REGISTRY_IMAGE}:${IMAGE_TAG}"
+        if ! pull_image "$IMAGE_REF"; then
+            exit 1
+        fi
+    fi
+}
+
+# Render BOX_SPEC + launch command into RUN_ARGS for `podman run`
+podman_rt_render() {
+    # shellcheck disable=SC2054  # commas are part of the --userns option value
+    RUN_ARGS=(
+        --rm
+        -it
+        --name "$CONTAINER_NAME"
+        --hostname "$BOX_NAME"
+        --userns=keep-id:uid=1000,gid=1000
+        -w /workspace
+    )
+
+    local entry kind a b c
+    for entry in "${BOX_SPEC[@]}"; do
+        IFS='|' read -r kind a b c <<< "$entry"
+        case "$kind" in
+            mount)
+                if [[ ",${c}," == *,nolabel,* ]]; then
+                    c="${c//nolabel/}"; c="${c#,}"; c="${c%,}"
+                    RUN_ARGS+=(-v "${a}:${b}${c:+:$c}")
+                else
+                    RUN_ARGS+=(-v "${a}:${b}$(vol_flag "$c")")
+                fi
+                ;;
+            env)
+                RUN_ARGS+=(-e "${a}=${b}")
+                ;;
+        esac
+    done
+
+    # Firewall needs the netfilter capabilities (Linux only)
+    if ! $NO_FIREWALL; then
+        RUN_ARGS+=(
+            --cap-add=NET_ADMIN
+            --cap-add=NET_RAW
+        )
+    fi
+
+    if $NO_FIREWALL && ! $NEEDS_SHELL; then
+        RUN_ARGS+=("$IMAGE_REF" "$HARNESS_CLI" "${EXTRA_ARGS[@]}")
+    elif $NO_FIREWALL; then
+        RUN_ARGS+=("$IMAGE_REF" /bin/bash -c "${LAUNCH_CMD}")
+    else
+        # Start with firewall initialization, then run the harness
+        RUN_ARGS+=("$IMAGE_REF" /bin/bash -c "sudo /usr/local/bin/init-firewall.sh && ${LAUNCH_CMD}")
+    fi
+}
+
+podman_rt_exec() {
+    # Debug mode: print the podman command
+    if [[ -n "${DEBUG}" ]]; then
+        echo "DEBUG: podman run command:" >&2
+        printf '%q ' podman run "${RUN_ARGS[@]}" >&2
+        echo >&2
+    fi
+    exec podman run "${RUN_ARGS[@]}"
+}
+
+# Bind the rt_* interface to the selected backend (podman is the only one
+# for now; BOX_RUNTIME names it for status output and future selection)
+select_runtime() {
+    # shellcheck disable=SC2034
+    BOX_RUNTIME="podman"
+    rt_check()         { podman_rt_check; }
+    rt_list_sessions() { podman_rt_list_sessions; }
+    rt_build_image()   { podman_rt_build_image; }
+    rt_resolve_image() { podman_rt_resolve_image; }
+    rt_render()        { podman_rt_render; }
+    rt_exec()          { podman_rt_exec; }
+}
+
+# --- Host-side features (clipboard, audio, npm-global, GitHub token) --------
+
+# Clipboard/display access for image pasting (CTRL+V)
+add_clipboard_mounts() {
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+            # Wayland clipboard access
+            add_mount "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" "ro,nolabel"
+            add_env WAYLAND_DISPLAY "$WAYLAND_DISPLAY"
+            add_env XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR"
+        elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+            # X11 clipboard access
+            add_mount /tmp/.X11-unix /tmp/.X11-unix "ro,nolabel"
+            add_env DISPLAY "$DISPLAY"
+            if [[ -f "${HOME}/.Xauthority" ]]; then
+                add_mount "${HOME}/.Xauthority" /home/coder/.Xauthority "ro"
+            fi
+        fi
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        # macOS: basic X11 support via XQuartz (if available)
+        if [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+            add_mount /tmp/.X11-unix /tmp/.X11-unix "ro,nolabel"
+            add_env DISPLAY "$DISPLAY"
+        fi
+    fi
+}
+
+# Mount npm global packages (read-only) if available and not a system directory
+add_npm_global_mount() {
+    if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
+        # On macOS, only /Users/* or /private/* paths work with Podman VM
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            if [[ "$NPM_GLOBAL" == /Users/* || "$NPM_GLOBAL" == /private/* ]]; then
+                add_mount "$NPM_GLOBAL" /home/coder/.npm-global "ro"
+            else
+                log_warn "npm global prefix '$NPM_GLOBAL' not accessible in Podman VM, skipping"
+            fi
+        else
+            add_mount "$NPM_GLOBAL" /home/coder/.npm-global "ro"
+        fi
+    fi
+}
+
+# GitHub token injection for authentication. Sets GH_TOKEN_VALUE and
+# GH_TOKEN_SOURCE for the launch summary.
+add_github_token() {
+    GH_TOKEN_VALUE=""
+    GH_TOKEN_SOURCE=""
+
+    $NO_GITHUB && return 0
+
+    if [[ -n "$GITHUB_TOKEN" ]]; then
+        # Use explicitly provided token
+        GH_TOKEN_VALUE="$GITHUB_TOKEN"
+        GH_TOKEN_SOURCE="provided"
+    elif command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        # Auto-detect from host's gh CLI
+        GH_TOKEN_VALUE=$(gh auth token 2>/dev/null || true)
+        GH_TOKEN_SOURCE="auto-detected"
+    fi
+
+    # Pass token to container if available
+    if [[ -n "$GH_TOKEN_VALUE" ]]; then
+        add_env GH_TOKEN "$GH_TOKEN_VALUE"
+        add_env GITHUB_TOKEN "$GH_TOKEN_VALUE"
+    elif $WITH_GITHUB; then
+        log_warn "GitHub token requested but not available"
+        log_warn "Run 'gh auth login' on host to authenticate with GitHub"
+    fi
+}
+
+# --- Main -------------------------------------------------------------------
 
 box_main() {
     # Parse arguments
@@ -519,72 +757,34 @@ box_main() {
         esac
     done
 
-    # Handle --install early (doesn't need podman)
+    # Handle --install early (doesn't need a container runtime)
     if $SHOW_INSTALL; then
         show_install_instructions
         exit 0
     fi
 
-    # Check if podman is available
-    if ! command -v podman &> /dev/null; then
-        log_error "podman is not installed or not in PATH"
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            log_error "Install Podman Desktop from: https://podman-desktop.io/downloads"
-            log_error "Or install via Homebrew: brew install podman"
-        fi
-        exit 1
-    fi
+    select_runtime
+    rt_check
 
-    # On macOS, check if podman machine is running
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if ! podman machine list 2>/dev/null | grep -q "Currently running"; then
-            log_warn "Podman machine might not be running"
-            log_info "Start it with: podman machine start"
-        fi
-    fi
+    WORKSPACE_DIR="$(pwd -P)"
 
     # Handle --list-sessions early (doesn't need image)
     if $LIST_SESSIONS; then
-        WORKSPACE_DIR="$(pwd -P)"
-        BASE_NAME=$(generate_container_name "$WORKSPACE_DIR")
         log_info "Active sessions for: $(basename "$WORKSPACE_DIR")"
-        podman ps --filter "name=^${BASE_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"
+        rt_list_sessions
         exit 0
     fi
 
     if $BUILD_ONLY; then
-        build_image
+        rt_build_image
         exit 0
     fi
 
-    # Determine image tag and reference
+    # Determine image tag and reference (pulls if needed)
     IMAGE_TAG=$(determine_image_tag)
-
-    # On macOS, auto-detect and prefer local ARM64 image to avoid x86 emulation
-    if [[ "$OS_TYPE" == "macos" ]] && ! $USE_LOCAL && podman image exists "${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"; then
-        log_info "Found local ARM64 image, using it to avoid emulation"
-        USE_LOCAL=true
-    fi
-
-    if $USE_LOCAL; then
-        # Local mode: use locally-built image
-        IMAGE_REF="${LOCAL_IMAGE_NAME}:${IMAGE_TAG}"
-        if ! podman image exists "$IMAGE_REF"; then
-            log_error "Local image '$IMAGE_REF' not found"
-            log_error "Build it with: ${BOX_NAME} --build"
-            exit 1
-        fi
-        log_info "Using local image: $IMAGE_REF"
-    else
-        # Registry mode: pull from quay.io
-        IMAGE_REF="${FULL_REGISTRY_IMAGE}:${IMAGE_TAG}"
-        if ! pull_image "$IMAGE_REF"; then
-            exit 1
-        fi
-    fi
+    rt_resolve_image
 
     # Prepare mount points
-    WORKSPACE_DIR="$(pwd -P)"
     SESSION_ID=$(generate_session_id)
     CONTAINER_NAME=$(generate_container_name "$WORKSPACE_DIR" "$SESSION_ID")
     # shellcheck disable=SC2034  # PROJECT_KEY is used by the harness hooks
@@ -600,23 +800,19 @@ box_main() {
         NPM_GLOBAL=$(npm config get prefix 2>/dev/null || echo "")
     fi
 
-    # Build podman run arguments
-    # shellcheck disable=SC2054  # commas are part of the --userns option value
-    PODMAN_ARGS=(
-        --rm
-        -it
-        --name "$CONTAINER_NAME"
-        --hostname "$BOX_NAME"
-        --userns=keep-id:uid=1000,gid=1000
-        -e PROJECT_NAME="$(basename "$WORKSPACE_DIR")"
-        -v "${WORKSPACE_DIR}:/workspace$(vol_flag "")"
-        -e "TERM=${TERM:-xterm-256color}"
-        -e "LANG=${LANG:-C.UTF-8}"
-        -w /workspace
-    )
+    # Session spec: workspace and basic environment
+    add_env PROJECT_NAME "$(basename "$WORKSPACE_DIR")"
+    add_mount "$WORKSPACE_DIR" /workspace
+    add_env TERM "${TERM:-xterm-256color}"
+    add_env LANG "${LANG:-C.UTF-8}"
 
     # Harness-specific mounts and environment
     harness_mounts
+    if [[ -n "${PODMAN_ARGS[*]:-}" ]]; then
+        log_error "This ${BOX_NAME} launcher is older than the shared engine (it appends to PODMAN_ARGS)"
+        log_error "Update the launcher and box-common.sh together"
+        exit 1
+    fi
 
     # Add optional mounts that may not exist on all systems
     add_optional_mount WITH_GCLOUD "${GOOGLE_CONFIG_DIR}/" "/home/coder/.config/gcloud" "ro"
@@ -626,115 +822,41 @@ box_main() {
     if [[ "$OS_TYPE" == "linux" ]]; then
         # Timezone
         if [[ -f /etc/localtime ]]; then
-            PODMAN_ARGS+=(-v /etc/localtime:/etc/localtime:ro)
+            add_mount /etc/localtime /etc/localtime "ro,nolabel"
         fi
-        PODMAN_ARGS+=(-e TZ="${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}")
+        add_env TZ "${TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}"
 
         # PulseAudio socket for audio support
         if [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-            PODMAN_ARGS+=(
-                -v "${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native$(vol_flag "")"
-                -e PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
-            )
+            add_mount "${XDG_RUNTIME_DIR}/pulse/native" "${XDG_RUNTIME_DIR}/pulse/native"
+            add_env PULSE_SERVER "unix:${XDG_RUNTIME_DIR}/pulse/native"
         fi
     fi
 
     # Generic passthrough: forward harness-relevant env vars from host
     if [[ -n "$ENV_PASSTHROUGH_REGEX" ]]; then
         while IFS='=' read -r name value; do
-            PODMAN_ARGS+=(-e "${name}=${value}")
+            add_env "$name" "$value"
         done < <(env | grep -E "$ENV_PASSTHROUGH_REGEX")
     fi
 
     # Also pass through specific non-prefixed vars if set
     for var in "${ENV_PASSTHROUGH_VARS[@]}"; do
         if [[ -n "${!var}" ]]; then
-            PODMAN_ARGS+=(-e "${var}=${!var}")
+            add_env "$var" "${!var}"
         fi
     done
 
-    # Clipboard/display access for image pasting (CTRL+V)
     if ! $NO_CLIPBOARD; then
-        if [[ "$OS_TYPE" == "linux" ]]; then
-            if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
-                # Wayland clipboard access
-                PODMAN_ARGS+=(
-                    -v "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:ro"
-                    -e "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
-                    -e "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-                )
-            elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
-                # X11 clipboard access
-                PODMAN_ARGS+=(
-                    -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
-                    -e "DISPLAY=${DISPLAY}"
-                )
-                if [[ -f "${HOME}/.Xauthority" ]]; then
-                    PODMAN_ARGS+=(-v "${HOME}/.Xauthority:/home/coder/.Xauthority$(vol_flag "ro")")
-                fi
-            fi
-        elif [[ "$OS_TYPE" == "macos" ]]; then
-            # macOS: basic X11 support via XQuartz (if available)
-            if [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
-                PODMAN_ARGS+=(
-                    -v "/tmp/.X11-unix:/tmp/.X11-unix:ro"
-                    -e "DISPLAY=${DISPLAY}"
-                )
-            fi
-        fi
+        add_clipboard_mounts
     fi
+    add_npm_global_mount
+    add_github_token
 
-    # Mount npm global packages (read-only) if available and not a system directory
-    if [[ -n "$NPM_GLOBAL" && "$NPM_GLOBAL" != "/usr" && "$NPM_GLOBAL" != "/usr/local" && -d "$NPM_GLOBAL" ]]; then
-        # On macOS, only /Users/* or /private/* paths work with Podman VM
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            if [[ "$NPM_GLOBAL" == /Users/* || "$NPM_GLOBAL" == /private/* ]]; then
-                PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/coder/.npm-global$(vol_flag "ro")")
-            else
-                log_warn "npm global prefix '$NPM_GLOBAL' not accessible in Podman VM, skipping"
-            fi
-        else
-            PODMAN_ARGS+=(-v "${NPM_GLOBAL}:/home/coder/.npm-global$(vol_flag "ro")")
-        fi
-    fi
-
-    # GitHub token injection for authentication
-    # Token is auto-detected from host's gh CLI unless --no-github is specified
-    GH_TOKEN_VALUE=""
-    GH_TOKEN_SOURCE=""
-
-    if ! $NO_GITHUB; then
-        if [[ -n "$GITHUB_TOKEN" ]]; then
-            # Use explicitly provided token
-            GH_TOKEN_VALUE="$GITHUB_TOKEN"
-            GH_TOKEN_SOURCE="provided"
-        elif command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
-            # Auto-detect from host's gh CLI
-            GH_TOKEN_VALUE=$(gh auth token 2>/dev/null || true)
-            GH_TOKEN_SOURCE="auto-detected"
-        fi
-
-        # Pass token to container if available
-        if [[ -n "$GH_TOKEN_VALUE" ]]; then
-            PODMAN_ARGS+=(-e "GH_TOKEN=${GH_TOKEN_VALUE}")
-            PODMAN_ARGS+=(-e "GITHUB_TOKEN=${GH_TOKEN_VALUE}")
-        elif $WITH_GITHUB; then
-            log_warn "GitHub token requested but not available"
-            log_warn "Run 'gh auth login' on host to authenticate with GitHub"
-        fi
-    fi
-
-    # Add firewall capabilities if firewall is enabled (Linux only)
-    if ! $NO_FIREWALL; then
-        if [[ "$OS_TYPE" == "linux" ]]; then
-            PODMAN_ARGS+=(
-                --cap-add=NET_ADMIN
-                --cap-add=NET_RAW
-            )
-        else
-            log_warn "Firewall feature is only supported on Linux, ignoring --with-firewall flag"
-            NO_FIREWALL=true
-        fi
+    # Firewall is Linux only
+    if ! $NO_FIREWALL && [[ "$OS_TYPE" != "linux" ]]; then
+        log_warn "Firewall feature is only supported on Linux, ignoring --with-firewall flag"
+        NO_FIREWALL=true
     fi
 
     # Build the launch command; the harness hook may override LAUNCH_CMD
@@ -752,14 +874,7 @@ box_main() {
         NEEDS_SHELL=false
     fi
 
-    if $NO_FIREWALL && ! $NEEDS_SHELL; then
-        PODMAN_ARGS+=("$IMAGE_REF" "$HARNESS_CLI" "${EXTRA_ARGS[@]}")
-    elif $NO_FIREWALL; then
-        PODMAN_ARGS+=("$IMAGE_REF" /bin/bash -c "${LAUNCH_CMD}")
-    else
-        # Start with firewall initialization, then run the harness
-        PODMAN_ARGS+=("$IMAGE_REF" /bin/bash -c "sudo /usr/local/bin/init-firewall.sh && ${LAUNCH_CMD}")
-    fi
+    rt_render
 
     log_info "Starting ${HARNESS_TITLE} container..."
     log_info "Workspace: $WORKSPACE_DIR"
@@ -778,13 +893,5 @@ box_main() {
         log_info "$status"
     done
 
-    # Debug mode: print the podman command
-    if [[ -n "${DEBUG}" ]]; then
-        echo "DEBUG: podman run command:" >&2
-        printf '%q ' podman run "${PODMAN_ARGS[@]}" >&2
-        echo >&2
-    fi
-
-    # Run the container
-    exec podman run "${PODMAN_ARGS[@]}"
+    rt_exec
 }

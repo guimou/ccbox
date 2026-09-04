@@ -17,6 +17,7 @@
 -v /etc/localtime:/etc/localtime:ro
 -v ROOT/home/.config/gcloud:/home/coder/.config/gcloud:ro,z
 -v ROOT/home/.gitconfig:/home/coder/.gitconfig:ro,z
+-v ROOT/home/.qwen/.env:/home/coder/.qwen/.env:ro,z
 -v ROOT/home/.qwen/QWEN.md:/home/coder/.qwen/QWEN.md:z
 -v ROOT/home/.qwen/oauth_creds.json:/home/coder/.qwen/oauth_creds.json:z
 -v ROOT/home/.qwen/qcbox-projects/demo_HASH/file-history:/home/coder/.qwen/file-history:z

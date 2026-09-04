@@ -37,7 +37,8 @@ mkdir -p "$FAKE_HOME" "$WORKSPACE" "$NPM_PREFIX" "$STUBS" "$OUT"
 
 # Files the launchers detect on the host
 touch "${FAKE_HOME}/.gitconfig" "${FAKE_HOME}/.claude.json"
-mkdir -p "${FAKE_HOME}/.config/gcloud"
+mkdir -p "${FAKE_HOME}/.config/gcloud" "${FAKE_HOME}/.claude" "${FAKE_HOME}/.qwen"
+touch "${FAKE_HOME}/.claude/status-line.sh" "${FAKE_HOME}/.claude/RULES.md" "${FAKE_HOME}/.qwen/.env"
 
 # --- stubs ---------------------------------------------------------------
 
@@ -45,7 +46,7 @@ cat > "${STUBS}/podman" <<'EOF'
 #!/bin/bash
 case "$1" in
     pull)    exit 0 ;;
-    image)   exit 1 ;;                      # "image exists" -> not found
+    image)   [[ "$3" == codebox-base:* ]] && exit 1; exit 0 ;;   # local harness image exists, no local base
     ps)      exit 0 ;;
     unshare) shift; exec "$@" ;;
     run)     shift; printf '%s\n' "$@" > "${RENDER_OUT}"; exit 0 ;;
@@ -86,6 +87,7 @@ SCENARIOS=(
     "ccbox-shell|ccbox|--shell --with-credentials"
     "ccbox-safe-mode-args|ccbox|--safe-mode -- --version"
     "ccbox-no-github|ccbox|--no-github --claude-version 1.2.3"
+    "ccbox-explicit|ccbox|--github-token ghp_explicit --npm-global ROOT/npm-global --local"
     "ocbox-default|ocbox|"
     "ocbox-all-opts|ocbox|--with-firewall --with-credentials --with-gcloud --with-gitconfig"
     "ocbox-args|ocbox|-- --version"
@@ -150,6 +152,7 @@ status=0
 mkdir -p "$GOLDEN_DIR"
 for entry in "${SCENARIOS[@]}"; do
     IFS='|' read -r name box args <<< "$entry"
+    args="${args//ROOT/$ROOT}"
     # shellcheck disable=SC2086  # args are intentionally word-split
     name="$name" run_launcher "$box" $args || {
         echo "FAIL ${name}: launcher exited with an error"

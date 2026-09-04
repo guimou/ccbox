@@ -1,0 +1,31 @@
+name: Launcher tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'ccbox'
+      - 'ocbox'
+      - 'qcbox'
+      - 'cxbox'
+      - 'lib/**'
+      - 'tests/**'
+      - 'init-firewall.sh'
+      - '.github/workflows/tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  launchers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: shellcheck
+        run: shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh
+
+      - name: Golden test of the rendered command line
+        run: tests/render-test.sh

@@ -132,11 +132,9 @@ harness_setup_project() {
 }
 
 harness_mounts() {
-    PODMAN_ARGS+=(
-        # Per-project state dir mounted as the container's entire Codex home
-        # (sessions, state DB, memories, goals, logs, and the config.toml copy)
-        -v "${PROJECT_DATA_DIR}/data:/home/coder/.codex$(vol_flag "")"
-    )
+    # Per-project state dir mounted as the container's entire Codex home
+    # (sessions, state DB, memories, goals, logs, and the config.toml copy)
+    add_mount "${PROJECT_DATA_DIR}/data" /home/coder/.codex
 
     # Credentials (opt-in via --with-credentials, read-write).
     # Mounted over the per-project data dir so credentials stay shared.
