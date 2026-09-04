@@ -1,0 +1,54 @@
+--hostname ccbox
+--name ccbox-demo-HASH-SESSION
+--rm
+--userns=keep-id:uid=1000,gid=1000
+-e ANTHROPIC_API_KEY=anthropic-stub
+-e AWS_REGION=eu-west-1
+-e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+-e GH_TOKEN=ghp_stubtoken
+-e GITHUB_TOKEN=ghp_stubtoken
+-e LANG=C.UTF-8
+-e NO_COLOR=1
+-e PROJECT_NAME=demo
+-e TERM=xterm-256color
+-e TERM=xterm-256color
+-e TZ=UTC
+-it
+-v /etc/localtime:/etc/localtime:ro
+-v ROOT/home/.claude.json:/home/coder/.claude.json:z
+-v ROOT/home/.claude/CLAUDE.md:/home/coder/.claude/CLAUDE.md:z
+-v ROOT/home/.claude/agents:/home/coder/.claude/agents:z
+-v ROOT/home/.claude/backups:/home/coder/.claude/backups:z
+-v ROOT/home/.claude/cache:/home/coder/.claude/cache:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/debug:/home/coder/.claude/debug:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/history.jsonl:/home/coder/.claude/history.jsonl:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/logs:/home/coder/.claude/logs:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/plans:/home/coder/.claude/plans:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/plugins:/home/coder/.claude/plugins:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/projects:/home/coder/.claude/projects:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/session-env:/home/coder/.claude/session-env:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/shell-snapshots:/home/coder/.claude/shell-snapshots:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/tasks:/home/coder/.claude/tasks:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/teams:/home/coder/.claude/teams:z
+-v ROOT/home/.claude/ccbox-projects/demo_HASH/todos:/home/coder/.claude/todos:z
+-v ROOT/home/.claude/commands:/home/coder/.claude/commands:z
+-v ROOT/home/.claude/file-history:/home/coder/.claude/file-history:z
+-v ROOT/home/.claude/hooks:/home/coder/.claude/hooks:z
+-v ROOT/home/.claude/keybindings.json:/home/coder/.claude/keybindings.json:z
+-v ROOT/home/.claude/paste-cache:/home/coder/.claude/paste-cache:z
+-v ROOT/home/.claude/rules:/home/coder/.claude/rules:z
+-v ROOT/home/.claude/settings.json:/home/coder/.claude/settings.json:z
+-v ROOT/home/.claude/settings.local.json:/home/coder/.claude/settings.local.json:z
+-v ROOT/home/.claude/skills:/home/coder/.claude/skills:z
+-v ROOT/home/.claude/stats-cache.json:/home/coder/.claude/stats-cache.json:z
+-v ROOT/home/.claude/statsig:/home/coder/.claude/statsig:z
+-v ROOT/home/.claude/themes:/home/coder/.claude/themes:z
+-v ROOT/home/.claude/workflows:/home/coder/.claude/workflows:z
+-v ROOT/npm-global:/home/coder/.npm-global:ro,z
+-v ROOT/repos/demo:/workspace:z
+-w /workspace
+--
+quay.io/guimou/ccbox:TAG
+/bin/bash
+-c
+tmux new-session -d -s coder 'claude ' && (/home/coder/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t coder

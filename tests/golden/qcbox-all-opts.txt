@@ -1,0 +1,33 @@
+--cap-add=NET_ADMIN
+--cap-add=NET_RAW
+--hostname qcbox
+--name qcbox-demo-HASH-SESSION
+--rm
+--userns=keep-id:uid=1000,gid=1000
+-e ANTHROPIC_API_KEY=anthropic-stub
+-e GH_TOKEN=ghp_stubtoken
+-e GITHUB_TOKEN=ghp_stubtoken
+-e LANG=C.UTF-8
+-e NO_COLOR=1
+-e OPENAI_API_KEY=openai-stub
+-e PROJECT_NAME=demo
+-e TERM=xterm-256color
+-e TZ=UTC
+-it
+-v /etc/localtime:/etc/localtime:ro
+-v ROOT/home/.config/gcloud:/home/coder/.config/gcloud:ro,z
+-v ROOT/home/.gitconfig:/home/coder/.gitconfig:ro,z
+-v ROOT/home/.qwen/QWEN.md:/home/coder/.qwen/QWEN.md:z
+-v ROOT/home/.qwen/oauth_creds.json:/home/coder/.qwen/oauth_creds.json:z
+-v ROOT/home/.qwen/qcbox-projects/demo_HASH/file-history:/home/coder/.qwen/file-history:z
+-v ROOT/home/.qwen/qcbox-projects/demo_HASH/projects:/home/coder/.qwen/projects:z
+-v ROOT/home/.qwen/qcbox-projects/demo_HASH/tmp:/home/coder/.qwen/tmp:z
+-v ROOT/home/.qwen/settings.json:/home/coder/.qwen/settings.json:z
+-v ROOT/npm-global:/home/coder/.npm-global:ro,z
+-v ROOT/repos/demo:/workspace:z
+-w /workspace
+--
+quay.io/guimou/qcbox:TAG
+/bin/bash
+-c
+sudo /usr/local/bin/init-firewall.sh && /bin/bash
