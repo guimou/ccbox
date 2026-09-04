@@ -1,0 +1,234 @@
+# Plan: running the boxes on Kubernetes / OpenShift with Apptainer
+
+Status: draft, not started. Branch `feat/kubernetes-apptainer`.
+
+## Goal
+
+Keep the exact ccbox experience (cd into a project, run `ccbox`, get an isolated
+harness that can only see that project plus explicitly shared config), but with a
+long-lived pod as the "host" instead of a workstation.
+
+- The pod is the host. You `oc rsh` into it (or attach to tmux in it), navigate
+  the shared filesystem, and run `ccbox` / `ocbox` / `qcbox` / `cxbox` as today.
+- Harness containers become Apptainer runs of a SIF built from the existing OCI
+  images. No new harness image pipeline.
+- One RWX PVC holds everything: home directory, projects, per-project harness
+  data, and the shared SIF store. Several coding pods can share it.
+- The isolation invariant is unchanged: a session sees `/workspace` (its
+  project), its own per-project data dir, and the shared config files the
+  launcher chooses. Nothing else.
+
+This builds on the findings of the school-of-sardeenz Apptainer spike (rootless
+Apptainer in a pod on a network RWX volume): custom seccomp SCC allowing
+`Unconfined`, `/dev/fuse` via the CRI-O annotation, no `hostUsers: false`,
+SIF conversion scratch on a node-local emptyDir, SIF executed in place from the
+RWX volume through squashfuse.
+
+## Non-goals (for now)
+
+- Multi-user control plane, web UI, operator, pod-per-session orchestration.
+- Replacing the Podman path. Host usage stays the primary, unchanged path.
+- Firewall inside the harness. Egress control moves to the namespace.
+
+## Design
+
+### 1. Runtime backends in the launcher engine
+
+Today `lib/box-common.sh` and the four wrappers build a single `PODMAN_ARGS`
+array by appending raw `-v host:container:opts` and `-e NAME=VALUE` flags, then
+`exec podman run`. The Apptainer path needs the same mounts and environment,
+rendered as `--bind` / `--env` for `apptainer exec`.
+
+Introduce a runtime-neutral model:
+
+- `add_mount HOST CONTAINER [OPTS]` appends to a `MOUNTS` array
+  (`host|container|opts`). `OPTS` is `ro` or empty.
+- `add_env NAME VALUE` appends to an `ENVS` array.
+- `add_optional_mount` keeps its signature and calls `add_mount`.
+- Wrappers replace every `PODMAN_ARGS+=(-v ...)` / `PODMAN_ARGS+=(-e ...)`
+  with `add_mount` / `add_env`. Nothing else in the wrappers changes.
+- Runtime-specific flags that have no neutral meaning (`--userns`,
+  `--cap-add`, `--hostname`, `-it`) move into the backend.
+
+Two backends, selected once in `box_main`:
+
+| | `podman` (default) | `apptainer` |
+|---|---|---|
+| Selection | podman on PATH, or `--runtime podman` | `CODEBOX_RUNTIME=apptainer` (set in the pod image), or `--runtime apptainer`, or apptainer present and podman absent |
+| Image ref | `quay.io/guimou/<box>:<tag>` | `${CODEBOX_SIF_DIR}/<box>-<tag>.sif` |
+| Fetch | `podman pull` | `apptainer pull <sif> docker://quay.io/guimou/<box>:<tag>` if the SIF is missing; `--pull` forces a refresh (needed for `latest`) |
+| Build | `podman build` | not supported, clear error (build on a host or in CI) |
+| Mounts | `-v h:c[:ro],z` | `--bind h:c[:ro]` |
+| Env | `-e` | `--cleanenv` + `--env` |
+| Isolation flags | `--userns=keep-id`, `--rm -it`, `--hostname` | `--no-home --no-mount tmp,cwd --pid --ipc --writable-tmpfs --pwd /workspace` |
+| Session listing | `podman ps --filter name=` | `pgrep -af` on the apptainer command line (SIF path + workspace); `apptainer instance` is the alternative if listing needs to be more robust |
+| Firewall | `--cap-add NET_ADMIN,NET_RAW` + init script | unsupported: `--with-firewall` errors and points to the namespace egress policy |
+| Clipboard, audio, npm-global | as today | skipped (no host) |
+| Timezone | bind `/etc/localtime` | bind `/etc/localtime` |
+| GitHub token | host `gh auth token` | same code path: `GH_TOKEN` env in the pod (from a Secret) makes `gh auth status` succeed |
+
+Backend functions (`runtime_podman.sh`, `runtime_apptainer.sh` under `lib/`,
+sourced by `box-common.sh`; the flat-install layout copies them next to the
+launcher like `box-common.sh` today):
+
+- `rt_check` — the runtime binary exists, print install hints.
+- `rt_resolve_image TAG` — sets `IMAGE_REF`, pulls or converts as needed.
+- `rt_list_sessions` — for `--list-sessions`.
+- `rt_render` — turns `MOUNTS`, `ENVS`, `LAUNCH_CMD`, `NEEDS_SHELL` into the
+  final argv.
+- `rt_exec` — `exec podman run ...` or `exec apptainer exec ...`.
+
+`DEBUG=1` keeps printing the final command. That is also the test hook: a
+stub `podman`/`apptainer` on PATH plus `DEBUG=1` lets CI assert the rendered
+command line without a container runtime.
+
+### 2. Apptainer specifics to get right
+
+These are the details that differ from Podman and each needs a check on a
+real cluster (see the gate list below).
+
+- **Home handling.** Plain `apptainer exec` binds `$HOME`, cwd and `/tmp`
+  from the outside. That is exactly the leak we must avoid. Use `--no-home`
+  and `--no-mount tmp,cwd`, then bind explicitly. Do not use `--contain` /
+  `--containall`: they replace `/home/coder` with an empty session dir and
+  hide what the image ships there (`.bashrc`, `.cargo`, `.local/bin`,
+  `.playwright-mcp-config.json`, the tmux monitor).
+- **Writable paths.** The SIF root is read-only. Everything the harness writes
+  under `/home/coder` that is not a bound path goes to `--writable-tmpfs`.
+  The default Apptainer session dir cap is 64 MB (`sessiondir max size` in
+  `apptainer.conf`), which is too small for `~/.cache`, `~/.npm`, plugin
+  installs. Two measures: raise the cap in the pod image's `apptainer.conf`,
+  and bind a per-session scratch directory (node-local emptyDir) onto `/tmp`
+  and onto the known heavy cache paths.
+- **UID.** The pod runs as UID 1000 (`coder`), granted by the custom SCC
+  (`runAsUser: MustRunAsNonRoot`). Apptainer injects the running user into
+  the container's `/etc/passwd`, so the pod image must define `coder` with
+  UID 1000 and home `/home/coder`. All files on the PVC end up owned by 1000.
+- **SIF conversion.** `apptainer pull` unpacks the OCI layers into
+  `APPTAINER_TMPDIR`; that must be node-local (EMLINK on NFS-class
+  filesystems). The finished SIF lands on the RWX store. Write to a temp
+  name and `mv` into place so two pods pulling the same tag do not race.
+  Our images are large (Fedora + Chromium + toolchains), so budget a
+  multi-GB scratch and a few minutes for the first pull of each tag.
+- **Chromium.** Already runs with `--no-sandbox` in the base image, so the
+  nested user namespace should not matter. Verify Playwright MCP once.
+- **PID namespace.** `--pid` so the harness cannot see other sessions'
+  processes. Rootless-safe.
+- **Hostname.** Cosmetic; needs `--uts`. Skip unless free.
+- **Env hygiene.** `--cleanenv` always, then forward only the passthrough
+  lists plus `TERM`, `LANG`, `TZ`, `HOME=/home/coder`. Kubernetes injects
+  `KUBERNETES_*` and service env vars into every pod; they must not leak in.
+  The pod also sets `automountServiceAccountToken: false`.
+
+### 3. Pod image (`k8s/Containerfile`)
+
+Published as `quay.io/guimou/codebox-pod` (name to confirm). Contents:
+
+- Fedora 44 (same line as the base image), user `coder` UID 1000.
+- `apptainer` (rootless package, not `apptainer-suid`), `squashfuse`,
+  `fuse-overlayfs`, `fuse3`, `tzdata` with `/etc/localtime` set.
+- `tmux`, `git`, `gh`, `jq`, `vim`, `openssh-clients`, `bind-utils`.
+- The four launchers and `lib/*.sh` copied to `/usr/local/bin` (flat layout).
+- `/etc/apptainer/apptainer.conf` with a raised `sessiondir max size`.
+- Env: `CODEBOX_RUNTIME=apptainer`, `CODEBOX_SIF_DIR=/home/coder/.codebox/sifs`,
+  `APPTAINER_TMPDIR=/scratch`, `APPTAINER_CACHEDIR=/scratch/cache`,
+  `HOME=/home/coder`.
+- Entrypoint: create the home skeleton on first start (the PVC is mounted
+  over `/home/coder`, so nothing baked there survives), then run a tmux
+  server or `sleep infinity`. tmux in the pod is what makes sessions survive
+  a dropped `oc rsh`.
+
+### 4. Manifests (`k8s/`)
+
+Plain YAML with a kustomization, one namespace per user:
+
+- `scc.yaml` — cluster-admin, applied once: the spike SCC (`restricted-v2`
+  plus `seccompProfiles: [runtime/default, unconfined]`) with
+  `runAsUser: MustRunAsNonRoot`.
+- `pvc.yaml` — one RWX claim (storage class is a parameter), mounted at
+  `/home/coder`. Projects live under `/home/coder/projects`, harness data in
+  the usual per-launcher dirs (`~/.claude/ccbox-projects/...`), SIFs under
+  `~/.codebox/sifs`.
+- `deployment.yaml` — replicas 1, `/dev/fuse` annotation
+  (`io.kubernetes.cri-o.Devices: /dev/fuse`), `seccompProfile: Unconfined`,
+  `allowPrivilegeEscalation: false`, `runAsUser: 1000`,
+  `automountServiceAccountToken: false`, node-local `emptyDir` at `/scratch`,
+  `envFrom` a Secret.
+- `secret.example.yaml` — `GH_TOKEN`, `ANTHROPIC_API_KEY` and friends. The
+  launcher's env passthrough forwards them exactly as on a host.
+- `egressfirewall.example.yaml` — OVN-Kubernetes `EgressFirewall` with
+  `dnsName` rules generated from `firewall-domains*.txt` by a small script
+  (`k8s/gen-egress-firewall.sh`). This is the replacement for
+  `--with-firewall`; it applies to the whole namespace.
+
+### 5. CI
+
+- New job in `release.yml`: build and push the pod image when `k8s/`,
+  `lib/`, or a launcher changes.
+- Shell tests: stub runtime + `DEBUG=1`, assert the rendered `podman run`
+  and `apptainer exec` command lines for each launcher with a fixed HOME.
+  Also proves the refactor in phase 1 changed nothing.
+- `shellcheck` list extended with the new `lib/` files and `k8s/*.sh`.
+- Optional later: publish SIFs from CI via ORAS so pods never need to
+  convert. Not needed for v1 since `apptainer pull docker://` in the pod
+  works.
+
+### 6. Docs
+
+- `docs/kubernetes.md` — new: prerequisites (OpenShift 4.15+, RWX class,
+  cluster-admin for the SCC), deploy steps, daily use (`oc rsh`, tmux,
+  `ccbox` from a project dir), what differs from the host (no firewall
+  flag, no clipboard, SIF pull on first use), storage layout, security
+  posture (mount visibility preserved, thinner escape boundary than rootless
+  Podman, unconfined seccomp, same UID for everything in the pod).
+- `README.md` — a second "Run" section linking to it.
+- `docs/architecture.md` — runtime backends section and the pod diagram.
+- `docs/usage.md` — `--runtime`, `--pull`, and the `CODEBOX_*` env vars.
+- `AGENTS.md` — file structure and the runtime backend note.
+
+## Gates to run on a live cluster before phase 2 is finalized
+
+1. Pod admitted under the custom SCC as UID 1000 with `/dev/fuse` present and
+   `Seccomp: 0`; `unshare --user --map-root-user id` works (spike Gate 1).
+2. `apptainer pull` of `quay.io/guimou/ccbox:latest` into the RWX store with
+   node-local scratch: time, scratch size, resulting SIF size.
+3. `apptainer exec --no-home --no-mount tmp,cwd --pid --writable-tmpfs` with
+   the ccbox bind list: `claude --version` runs, `/home/coder` shows the
+   image content, `/workspace` is the project, nothing else from the PVC is
+   visible inside (`ls /home/coder/projects` must fail).
+4. Writes outside bound paths succeed and do not hit the session dir cap
+   after raising it; a plugin install and an `npm install` in the project
+   work.
+5. A full interactive session with history and todos persisting across two
+   launches in the same project, and a second project not seeing the first.
+6. Playwright MCP can start Chromium inside the SIF.
+7. Two pods sharing the PVC run sessions concurrently from the same SIF.
+
+## Phases / pull requests
+
+1. **Refactor the launcher engine to the runtime-neutral model** (no behavior
+   change). `add_mount` / `add_env`, `MOUNTS` / `ENVS`, `lib/runtime_podman.sh`,
+   wrappers migrated, shell tests asserting the rendered `podman run` line is
+   identical before and after for all four launchers.
+2. **Apptainer backend.** `lib/runtime_apptainer.sh`, `--runtime`, `--pull`,
+   `CODEBOX_RUNTIME` / `CODEBOX_SIF_DIR`, SIF fetch with atomic move,
+   session listing, firewall/clipboard/npm-global behavior, tests for the
+   rendered `apptainer exec` line, `docs/usage.md` additions.
+3. **Pod image and manifests.** `k8s/Containerfile`, `k8s/*.yaml`,
+   entrypoint, `apptainer.conf`, CI job for the pod image,
+   `docs/kubernetes.md`, README and AGENTS.md updates. Run the gates above
+   and fold the findings back into phase 2 details.
+4. **Optional follow-ups.** Egress firewall generator, SIF publishing via
+   ORAS, `apptainer instance` based session listing, Secret-mounted
+   credential files instead of files on the PVC.
+
+## Open questions
+
+- Target cluster: OpenShift version and RWX storage class (CephFS / ODF, EFS,
+  NFS). Cluster-admin available for the SCC?
+- Pod image name (`codebox-pod`?) and whether it should be Fedora like the
+  base or UBI9 like the Sardeenz worker.
+- Should `--with-credentials` files on the RWX PVC be acceptable, or should
+  credentials only ever come from Secrets on the cluster path?
+- Layout under the PVC: `/home/coder/projects/<name>` as the convention, or
+  free-form.
