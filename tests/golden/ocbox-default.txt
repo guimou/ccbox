@@ -1,0 +1,25 @@
+--hostname ocbox
+--name ocbox-demo-HASH-SESSION
+--rm
+--userns=keep-id:uid=1000,gid=1000
+-e ANTHROPIC_API_KEY=anthropic-stub
+-e AWS_REGION=eu-west-1
+-e GH_TOKEN=ghp_stubtoken
+-e GITHUB_TOKEN=ghp_stubtoken
+-e LANG=C.UTF-8
+-e NO_COLOR=1
+-e OPENAI_API_KEY=openai-stub
+-e PROJECT_NAME=demo
+-e TERM=xterm-256color
+-e TZ=UTC
+-it
+-v /etc/localtime:/etc/localtime:ro
+-v ROOT/home/.cache/opencode:/home/coder/.cache/opencode:z
+-v ROOT/home/.config/opencode:/home/coder/.config/opencode:z
+-v ROOT/home/.local/share/ocbox-projects/demo_HASH/data:/home/coder/.local/share/opencode:z
+-v ROOT/npm-global:/home/coder/.npm-global:ro,z
+-v ROOT/repos/demo:/workspace:z
+-w /workspace
+--
+quay.io/guimou/ocbox:TAG
+opencode

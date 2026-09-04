@@ -1,0 +1,17 @@
+# The pod's home directory: repositories under repos/, harness config and
+# per-project state, credential files, and the SIF store. RWX so that
+# several pods (or a pod being replaced) can share it. The storage class is
+# set by the overlay (any RWX class: CephFS/ODF, EFS, NFS, ...).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: codebox-home
+  labels:
+    app.kubernetes.io/name: codebox
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: CHANGE-ME-RWX
+  resources:
+    requests:
+      storage: 100Gi

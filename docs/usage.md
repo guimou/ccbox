@@ -41,10 +41,37 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--with-gitconfig` | Mount `~/.gitconfig` read-only (git identity, opt-in) |
 | `--with-credentials` | Mount the harness credential file read-write (opt-in; see [Credentials](#credentials)) |
 | `--list-sessions` | List active sessions for the current project |
+| `--runtime <name>` | Container runtime: `podman` (default when installed) or `apptainer` (see [Runtimes](#runtimes)) |
+| `--pull` | Apptainer only: convert the image to a SIF again even if one exists for this version |
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
 ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`. `--with-credentials` is available on all four launchers (see below).
+
+## Runtimes
+
+The launchers can drive two container runtimes. The mounts, environment and isolation are the same; only the way the container is started differs.
+
+| | `podman` | `apptainer` |
+|---|---|---|
+| Where | Your workstation (Linux, macOS) | A long-lived pod on Kubernetes/OpenShift, where the pod plays the role of the host (see [kubernetes.md](kubernetes.md)) |
+| Selection | Default when `podman` is installed | `--runtime apptainer`, or `CODEBOX_RUNTIME=apptainer`, or automatic when only `apptainer` is installed |
+| Image | Pulled from `quay.io/guimou/<box>:<version>` | The same image, converted once to `~/.codebox/sifs/<box>-<version>.sif` on first use (a few minutes) and reused. `--pull` re-converts (needed to refresh `latest`); `--local` refuses to convert. |
+| `--build` / `--build-base` | Supported | Not available (build with Podman or CI, then let the launcher convert) |
+| `--with-firewall` | Supported (Linux) | Refused: restrict egress at the pod or namespace level instead |
+| Clipboard, audio, npm-global mount | Wired when the desktop has them | Not applicable (no desktop) |
+| GitHub token, provider env vars, credential files, `--with-gcloud`, `--with-gitconfig` | Same on both | Same on both (env vars come from the pod environment, files from the pod's home directory) |
+| `--list-sessions` | `podman ps` | Marker files under `~/.codebox/sessions` (stale ones are pruned when listing) |
+
+Apptainer environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CODEBOX_RUNTIME` | unset | Runtime to use when `--runtime` is not given |
+| `CODEBOX_STATE_DIR` | `~/.codebox` | Launcher state (session markers) |
+| `CODEBOX_SIF_DIR` | `$CODEBOX_STATE_DIR/sifs` | SIF store; can be shared by several pods |
+| `CODEBOX_SCRATCH_DIR` | unset | When set, a per-session directory under it is bound at `/tmp` inside the container, so large temporary writes go to disk instead of the RAM-backed writable overlay. Point it at a node-local volume. |
+| `APPTAINER_TMPDIR` / `APPTAINER_CACHEDIR` | Apptainer defaults | Where the image-to-SIF conversion unpacks layers. Must be node-local disk, not a network filesystem. |
 
 ## Sessions and Isolation
 
@@ -260,7 +287,7 @@ ccbox --with-teams --with-tmux
 # Start with all customizations disabled (ccbox only)
 ccbox --safe-mode
 
-# Print the full podman command before execution
+# Print the full podman (or apptainer) command before execution
 DEBUG=1 ccbox
 ```
 

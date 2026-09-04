@@ -142,60 +142,58 @@ harness_setup_project() {
 }
 
 harness_mounts() {
-    PODMAN_ARGS+=(
-        # Global settings (shared across all projects)
-        -v "${CLAUDE_CONFIG_DIR}/settings.json:/home/coder/.claude/settings.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/settings.local.json:/home/coder/.claude/settings.local.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/keybindings.json:/home/coder/.claude/keybindings.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/CLAUDE.md:/home/coder/.claude/CLAUDE.md$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/statsig:/home/coder/.claude/statsig$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/hooks:/home/coder/.claude/hooks$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/commands:/home/coder/.claude/commands$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/skills:/home/coder/.claude/skills$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/agents:/home/coder/.claude/agents$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/rules:/home/coder/.claude/rules$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/themes:/home/coder/.claude/themes$(vol_flag "")"
-        # Additional global directories for core features
-        -v "${CLAUDE_CONFIG_DIR}/file-history:/home/coder/.claude/file-history$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/paste-cache:/home/coder/.claude/paste-cache$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/cache:/home/coder/.claude/cache$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/backups:/home/coder/.claude/backups$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/stats-cache.json:/home/coder/.claude/stats-cache.json$(vol_flag "")"
-        -v "${CLAUDE_CONFIG_DIR}/workflows:/home/coder/.claude/workflows$(vol_flag "")"
-        # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
-        # stores a PID, which is meaningless across PID namespaces (host vs container,
-        # or container vs container). Each container uses its own ephemeral copy
-        # pre-created in the image, so daemons never clobber each other.
-        # Project-specific data (isolated per project)
-        -v "${PROJECT_DATA_DIR}/history.jsonl:/home/coder/.claude/history.jsonl$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/projects:/home/coder/.claude/projects$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/todos:/home/coder/.claude/todos$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/plans:/home/coder/.claude/plans$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/tasks:/home/coder/.claude/tasks$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/teams:/home/coder/.claude/teams$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/plugins:/home/coder/.claude/plugins$(vol_flag "")"
-        # Additional project-scoped directories for shell/session features
-        -v "${PROJECT_DATA_DIR}/shell-snapshots:/home/coder/.claude/shell-snapshots$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/session-env:/home/coder/.claude/session-env$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/logs:/home/coder/.claude/logs$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/debug:/home/coder/.claude/debug$(vol_flag "")"
-        # Other config files
-        -v "${HOME}/.claude.json:/home/coder/.claude.json$(vol_flag "")"
-    )
+    # Global settings (shared across all projects)
+    add_mount "${CLAUDE_CONFIG_DIR}/settings.json"       /home/coder/.claude/settings.json
+    add_mount "${CLAUDE_CONFIG_DIR}/settings.local.json" /home/coder/.claude/settings.local.json
+    add_mount "${CLAUDE_CONFIG_DIR}/keybindings.json"    /home/coder/.claude/keybindings.json
+    add_mount "${CLAUDE_CONFIG_DIR}/CLAUDE.md"           /home/coder/.claude/CLAUDE.md
+    add_mount "${CLAUDE_CONFIG_DIR}/statsig"             /home/coder/.claude/statsig
+    add_mount "${CLAUDE_CONFIG_DIR}/hooks"               /home/coder/.claude/hooks
+    add_mount "${CLAUDE_CONFIG_DIR}/commands"            /home/coder/.claude/commands
+    add_mount "${CLAUDE_CONFIG_DIR}/skills"              /home/coder/.claude/skills
+    add_mount "${CLAUDE_CONFIG_DIR}/agents"              /home/coder/.claude/agents
+    add_mount "${CLAUDE_CONFIG_DIR}/rules"               /home/coder/.claude/rules
+    add_mount "${CLAUDE_CONFIG_DIR}/themes"              /home/coder/.claude/themes
+    # Additional global directories for core features
+    add_mount "${CLAUDE_CONFIG_DIR}/file-history"        /home/coder/.claude/file-history
+    add_mount "${CLAUDE_CONFIG_DIR}/paste-cache"         /home/coder/.claude/paste-cache
+    add_mount "${CLAUDE_CONFIG_DIR}/cache"               /home/coder/.claude/cache
+    add_mount "${CLAUDE_CONFIG_DIR}/backups"             /home/coder/.claude/backups
+    add_mount "${CLAUDE_CONFIG_DIR}/stats-cache.json"    /home/coder/.claude/stats-cache.json
+    add_mount "${CLAUDE_CONFIG_DIR}/workflows"           /home/coder/.claude/workflows
+    # Note: ~/.claude/daemon is intentionally NOT mounted. The daemon lock file
+    # stores a PID, which is meaningless across PID namespaces (host vs container,
+    # or container vs container). Each container uses its own ephemeral copy
+    # pre-created in the image, so daemons never clobber each other.
+    # Project-specific data (isolated per project)
+    add_mount "${PROJECT_DATA_DIR}/history.jsonl"        /home/coder/.claude/history.jsonl
+    add_mount "${PROJECT_DATA_DIR}/projects"             /home/coder/.claude/projects
+    add_mount "${PROJECT_DATA_DIR}/todos"                /home/coder/.claude/todos
+    add_mount "${PROJECT_DATA_DIR}/plans"                /home/coder/.claude/plans
+    add_mount "${PROJECT_DATA_DIR}/tasks"                /home/coder/.claude/tasks
+    add_mount "${PROJECT_DATA_DIR}/teams"                /home/coder/.claude/teams
+    add_mount "${PROJECT_DATA_DIR}/plugins"              /home/coder/.claude/plugins
+    # Additional project-scoped directories for shell/session features
+    add_mount "${PROJECT_DATA_DIR}/shell-snapshots"      /home/coder/.claude/shell-snapshots
+    add_mount "${PROJECT_DATA_DIR}/session-env"          /home/coder/.claude/session-env
+    add_mount "${PROJECT_DATA_DIR}/logs"                 /home/coder/.claude/logs
+    add_mount "${PROJECT_DATA_DIR}/debug"                /home/coder/.claude/debug
+    # Other config files
+    add_mount "${HOME}/.claude.json"                     /home/coder/.claude.json
 
     # Add status line script if it exists
     if [[ -f "${CLAUDE_CONFIG_DIR}/status-line.sh" ]]; then
-        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/status-line.sh:/home/coder/.claude/status-line.sh$(vol_flag "ro")")
+        add_mount "${CLAUDE_CONFIG_DIR}/status-line.sh" /home/coder/.claude/status-line.sh ro
     fi
 
     # Add user's global RULES.md file if it exists (read-only)
     if [[ -f "${CLAUDE_CONFIG_DIR}/RULES.md" ]]; then
-        PODMAN_ARGS+=(-v "${CLAUDE_CONFIG_DIR}/RULES.md:/home/coder/.claude/RULES.md$(vol_flag "ro")")
+        add_mount "${CLAUDE_CONFIG_DIR}/RULES.md" /home/coder/.claude/RULES.md ro
     fi
 
     # Enterprise managed settings (read-only)
     if [[ -d /etc/claude-code ]]; then
-        PODMAN_ARGS+=(-v "/etc/claude-code:/etc/claude-code$(vol_flag "ro")")
+        add_mount /etc/claude-code /etc/claude-code ro
     fi
 
     # Anthropic credentials (opt-in via --with-credentials, read-write).
@@ -209,7 +207,7 @@ harness_mounts() {
 harness_pre_run() {
     # Agent teams (experimental feature)
     if $WITH_TEAMS; then
-        PODMAN_ARGS+=(-e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)
+        add_env CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS 1
     fi
 
     # Safe mode: disable all customizations (CLAUDE.md, plugins, skills, hooks, MCP servers)
@@ -227,7 +225,7 @@ harness_pre_run() {
         # panes that have dropped back to a bash prompt after claude exits.
         LAUNCH_CMD="tmux new-session -d -s coder '${LAUNCH_CMD}' && (/home/coder/.ccbox-tmux-monitor.sh &>/dev/null &) && exec tmux attach -t coder"
         NEEDS_SHELL=true
-        PODMAN_ARGS+=(-e "TERM=xterm-256color")
+        add_env TERM xterm-256color
     fi
 }
 

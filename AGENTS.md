@@ -105,10 +105,12 @@ For local development, you can build the image locally:
 - `firewall-domains.txt` - Allowed network domains common to all harnesses (one per line)
 - `firewall-domains-{claude,opencode,qwencode,codex}.txt` - Harness-specific allowed domains, concatenated with the common file at build time into `/etc/codebox/firewall-domains.txt`
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
-- `lib/box-common.sh` - Shared launcher engine (sourced by all four launchers)
+- `lib/box-common.sh` - Shared launcher engine (sourced by all four launchers): runtime-neutral session spec (`add_mount` / `add_env`) plus two runtime backends that render it, Podman (`podman run`, workstation) and Apptainer (`apptainer exec` on a SIF, long-lived pod; selected with `--runtime` / `CODEBOX_RUNTIME`)
+- `tests/render-test.sh` + `tests/golden/` - Golden test of the rendered command line for every launcher (stub runtime; run it, and re-record when a change to mounts/env is intended)
 - `ccbox` / `ocbox` / `qcbox` / `cxbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
 - `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version` / `--codex-version`)
-- `docs/` - User-facing documentation: `usage.md`, `architecture.md`, `development.md` (README holds only the minimum and links here — keep them in sync when changing behavior)
+- `k8s/` - Running in a long-lived pod on Kubernetes/OpenShift: `Containerfile` + `entrypoint.sh` (UBI9 pod image `quay.io/guimou/codebox-pod`: Apptainer, tmux, the launchers; no dev tooling, that is in the SIF), `cluster/` (SCC + ClusterRole, cluster-admin, once), `base/` + `overlays/example/` (kustomize: service account, PVC, Deployment; the overlay sets namespace, RWX storage class, optional env Secret), `gen-egress-firewall.sh` (OVN EgressFirewall from the firewall domain lists, the pod-level replacement for `--with-firewall`)
+- `docs/` - User-facing documentation: `usage.md`, `architecture.md`, `development.md`, `kubernetes.md` (README holds only the minimum and links here — keep them in sync when changing behavior)
 
 ## What's Included
 
@@ -230,10 +232,16 @@ export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 ```
 Google Cloud credentials are mounted read-only from `~/.config/gcloud` when `--with-gcloud` is passed.
 
+## Kubernetes / OpenShift
+
+The launchers also run inside a long-lived pod (`docs/kubernetes.md`): the pod is the "host" (home directory on an RWX PVC, repos under `~/repos/<repo>`), the launchers use the Apptainer runtime backend (`CODEBOX_RUNTIME=apptainer` set in the pod image) and run the harness from a SIF converted from the regular image on first use. Pod requirements: the `codebox-apptainer` SCC (seccomp unconfined, UID 1000, no capabilities), the `/dev/fuse` CRI-O annotation, no `hostUsers: false`, a node-local `/scratch` emptyDir for SIF conversion and per-session `/tmp`. `--with-firewall` is refused there; `k8s/gen-egress-firewall.sh` produces the namespace-level equivalent. Credentials live on the PVC like on a host; env-var secrets come from an optional `codebox-env` Secret.
+
 ## CI/CD
 
 - `.github/workflows/release.yml` runs on pushes to main touching image/launcher files (plus a weekly schedule and a manual "rebuild all" dispatch). It detects which harnesses are affected: a version-file bump releases that harness as `{box}-v{version}`; a change to shared files (`Dockerfile`, `Dockerfile.base`, os-packages.txt, common firewall list, init-firewall.sh, `lib/`) rebuilds all harnesses as `{box}-v{version}-N`; a change to a harness-specific file (launcher, firewall overlay) rebuilds only that harness. If at least one harness needs a build, the base image is built first (once, skipped when its content tag already exists), then each harness builds in its own independent job (`fail-fast: false`).
 - `.github/workflows/build-base.yml` is the reusable base build: it computes the base content tag, skips if that tag exists in `quay.io/guimou/codebox-base` (unless forced), otherwise builds `Dockerfile.base` and pushes `{tag}` and `latest`.
+- `.github/workflows/tests.yml` runs shellcheck and the launcher golden test (`tests/render-test.sh`) on pull requests and on pushes touching launcher files.
+- `.github/workflows/build-pod.yml` builds `k8s/Containerfile` and pushes `quay.io/guimou/codebox-pod` (`latest` + commit SHA) when the pod image inputs or the launchers change on main.
 - `.github/workflows/build-and-push.yml` is the reusable per-harness build (also manually dispatchable with a `harness` input). It builds `Dockerfile` from the given base tag, pushes the image tagged `{version}`, `latest`, and the commit SHA, and, when given a `git_tag`, creates that git tag and GitHub Release in the same job.
 
 ## Architecture

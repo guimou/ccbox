@@ -93,15 +93,13 @@ harness_setup_project() {
 }
 
 harness_mounts() {
-    PODMAN_ARGS+=(
-        # Global settings and memory (shared across all projects)
-        -v "${QWEN_CONFIG_DIR}/settings.json:/home/coder/.qwen/settings.json$(vol_flag "")"
-        -v "${QWEN_CONFIG_DIR}/QWEN.md:/home/coder/.qwen/QWEN.md$(vol_flag "")"
-        # Project-specific state (isolated per project)
-        -v "${PROJECT_DATA_DIR}/projects:/home/coder/.qwen/projects$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/tmp:/home/coder/.qwen/tmp$(vol_flag "")"
-        -v "${PROJECT_DATA_DIR}/file-history:/home/coder/.qwen/file-history$(vol_flag "")"
-    )
+    # Global settings and memory (shared across all projects)
+    add_mount "${QWEN_CONFIG_DIR}/settings.json"     /home/coder/.qwen/settings.json
+    add_mount "${QWEN_CONFIG_DIR}/QWEN.md"           /home/coder/.qwen/QWEN.md
+    # Project-specific state (isolated per project)
+    add_mount "${PROJECT_DATA_DIR}/projects"         /home/coder/.qwen/projects
+    add_mount "${PROJECT_DATA_DIR}/tmp"              /home/coder/.qwen/tmp
+    add_mount "${PROJECT_DATA_DIR}/file-history"     /home/coder/.qwen/file-history
 
     # Qwen OAuth credentials (opt-in via --with-credentials, read-write).
     # harness_ensure_config already created an empty file when missing, so it
@@ -112,7 +110,7 @@ harness_mounts() {
 
     # Home-level env file if the user maintains one (read-only)
     if [[ -f "${QWEN_CONFIG_DIR}/.env" ]]; then
-        PODMAN_ARGS+=(-v "${QWEN_CONFIG_DIR}/.env:/home/coder/.qwen/.env$(vol_flag "ro")")
+        add_mount "${QWEN_CONFIG_DIR}/.env" /home/coder/.qwen/.env ro
     fi
 }
 

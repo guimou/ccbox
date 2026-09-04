@@ -1,0 +1,62 @@
+# SecurityContextConstraints for codebox pods (OpenShift, cluster-admin,
+# applied once per cluster). This is restricted-v2 with the minimum changes
+# rootless Apptainer needs:
+#
+#   - seccompProfiles: unconfined   restricted-v2's RuntimeDefault filter
+#                                   blocks the mount/user-namespace syscalls
+#                                   Apptainer uses to create its own
+#                                   unprivileged namespaces. No capability is
+#                                   added, no privileged containers, no host
+#                                   namespaces.
+#   - runAsUser: MustRunAsNonRoot   the pod runs as UID 1000 (coder), the
+#                                   UID the harness images are built for,
+#                                   instead of a namespace-range UID
+#   - fsGroup: RunAsAny             fsGroup 1000 so the RWX volume is
+#                                   writable by coder (CSI drivers that
+#                                   honor fsGroup; EFS uses an access point
+#                                   instead, see docs/kubernetes.md)
+#
+# /dev/fuse (needed by squashfuse to run the SIF in place) is exposed by the
+# io.kubernetes.cri-o.Devices pod annotation, which needs no SCC change on
+# OpenShift 4.15+.
+#
+# Do NOT combine with hostUsers: false / the nested-container SCC: pod-level
+# user namespaces need idmapped volume mounts, which NFS/EFS/CephFS cannot
+# provide, and the pod then fails to start.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: codebox-apptainer
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities: [ALL]
+readOnlyRootFilesystem: false
+runAsUser:
+  type: MustRunAsNonRoot
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+seccompProfiles:
+  - runtime/default
+  - unconfined
+volumes:
+  - configMap
+  - csi
+  - downwardAPI
+  - emptyDir
+  - ephemeral
+  - persistentVolumeClaim
+  - projected
+  - secret
+users: []
+groups: []
