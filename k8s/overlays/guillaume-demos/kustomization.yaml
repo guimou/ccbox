@@ -1,0 +1,51 @@
+# Overlay for the guillaume-demos namespace (AWS EFS, storage class efs-sc).
+#
+#   oc apply -k k8s/cluster                        # once, cluster-admin
+#   oc apply -k k8s/overlays/guillaume-demos
+#   oc -n guillaume-demos rollout status deploy/codebox
+#   oc -n guillaume-demos rsh deploy/codebox tmux new -A -s main
+#
+# Start / stop:
+#   oc -n guillaume-demos scale deploy/codebox --replicas=0   # stop (PVC kept)
+#   oc -n guillaume-demos scale deploy/codebox --replicas=1   # start
+#
+# EFS note: fsGroup is ignored; the CSI driver's access point decides the
+# POSIX identity. If files under /home/coder show up owned by a UID other
+# than 1000, the storage class needs uid/gid 1000 parameters (or a static
+# access point created with them).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: guillaume-demos
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: codebox-home
+    patch: |
+      - op: replace
+        path: /spec/storageClassName
+        value: efs-sc
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 100Gi
+  - target:
+      kind: Deployment
+      name: codebox
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: quay.io/guimou/codebox-pod:latest
+
+# Env-var secrets (GH_TOKEN, ANTHROPIC_API_KEY, ...): copy
+# ../example/codebox.env.example to codebox.env here (git-ignored), fill it
+# in and uncomment. Without it the pod starts with no keys and the harness
+# credential files on the PVC are used instead.
+#
+# secretGenerator:
+#   - name: codebox-env
+#     envs:
+#       - codebox.env
+#     options:
+#       disableNameSuffixHash: true
