@@ -2,6 +2,21 @@
 
 Status: draft, not started. Branch `feat/kubernetes-apptainer`.
 
+## Decisions (2026-09-04)
+
+- Cluster-admin is available, so the custom SCC is not a blocker.
+- The RWX storage class is a parameter. Targets include AWS EFS and CephFS;
+  the only requirement is RWX. Nothing may depend on one backend's behavior.
+- The pod image is UBI9. All development tooling lives in the Fedora-based
+  harness images, hence in the SIFs; the pod only runs tmux and Apptainer.
+- The pod is the equivalent of today's host, credentials included: harness
+  credential and settings files live on the PVC under `/home/coder`, exactly
+  as they live in the host home today. Harnesses write to those files and to
+  their directories, so read-only Secret mounts do not work. Runtime
+  credential injection without the pod knowing (OpenShell) is a later
+  extension, not part of this plan.
+- Repositories live under `/home/coder/repos/<repo-name>`.
+
 ## Goal
 
 Keep the exact ccbox experience (cd into a project, run `ccbox`, get an isolated
@@ -122,12 +137,18 @@ real cluster (see the gate list below).
 
 ### 3. Pod image (`k8s/Containerfile`)
 
-Published as `quay.io/guimou/codebox-pod` (name to confirm). Contents:
+Published as `quay.io/guimou/codebox-pod` (name to confirm). A thin UBI9
+image, in the spirit of the Sardeenz `worker-base`: every development tool
+is in the SIFs, the pod only hosts tmux and Apptainer. Contents:
 
-- Fedora 44 (same line as the base image), user `coder` UID 1000.
-- `apptainer` (rootless package, not `apptainer-suid`), `squashfuse`,
-  `fuse-overlayfs`, `fuse3`, `tzdata` with `/etc/localtime` set.
-- `tmux`, `git`, `gh`, `jq`, `vim`, `openssh-clients`, `bind-utils`.
+- `registry.access.redhat.com/ubi9/ubi`, user `coder` UID 1000, home
+  `/home/coder`.
+- From EPEL: `apptainer` (rootless package, not `apptainer-suid`),
+  `squashfuse`, `fuse-overlayfs`, `fuse3`. `tzdata` with `/etc/localtime`
+  set (Apptainer bind-mounts it by default and stock UBI9 has neither it nor
+  `/etc/hosts` handling; the spike hit this).
+- `tmux`, `git`, `jq`, `vim-minimal`, `openssh-clients`, `bind-utils` from
+  UBI/EPEL; `gh` from the GitHub CLI RPM repository.
 - The four launchers and `lib/*.sh` copied to `/usr/local/bin` (flat layout).
 - `/etc/apptainer/apptainer.conf` with a raised `sessiondir max size`.
 - Env: `CODEBOX_RUNTIME=apptainer`, `CODEBOX_SIF_DIR=/home/coder/.codebox/sifs`,
@@ -145,17 +166,21 @@ Plain YAML with a kustomization, one namespace per user:
 - `scc.yaml` — cluster-admin, applied once: the spike SCC (`restricted-v2`
   plus `seccompProfiles: [runtime/default, unconfined]`) with
   `runAsUser: MustRunAsNonRoot`.
-- `pvc.yaml` — one RWX claim (storage class is a parameter), mounted at
-  `/home/coder`. Projects live under `/home/coder/projects`, harness data in
-  the usual per-launcher dirs (`~/.claude/ccbox-projects/...`), SIFs under
-  `~/.codebox/sifs`.
+- `pvc.yaml` — one RWX claim, `storageClassName` left as a kustomize
+  parameter with no default (EFS, CephFS, NFS all valid). Mounted at
+  `/home/coder`. Repositories live under `/home/coder/repos/<repo-name>`,
+  harness data in the usual per-launcher dirs (`~/.claude/ccbox-projects/...`),
+  credential and settings files where the harness expects them in the home
+  directory, SIFs under `~/.codebox/sifs`.
 - `deployment.yaml` — replicas 1, `/dev/fuse` annotation
   (`io.kubernetes.cri-o.Devices: /dev/fuse`), `seccompProfile: Unconfined`,
   `allowPrivilegeEscalation: false`, `runAsUser: 1000`,
   `automountServiceAccountToken: false`, node-local `emptyDir` at `/scratch`,
   `envFrom` a Secret.
-- `secret.example.yaml` — `GH_TOKEN`, `ANTHROPIC_API_KEY` and friends. The
-  launcher's env passthrough forwards them exactly as on a host.
+- `secret.example.yaml` — optional `GH_TOKEN` and env-var based provider
+  keys (`ANTHROPIC_API_KEY`, ...). The launcher's env passthrough forwards
+  them exactly as on a host. File-based credentials (`--with-credentials`,
+  OAuth stores, settings files holding keys) stay on the PVC, as on a host.
 - `egressfirewall.example.yaml` — OVN-Kubernetes `EgressFirewall` with
   `dnsName` rules generated from `firewall-domains*.txt` by a small script
   (`k8s/gen-egress-firewall.sh`). This is the replacement for
@@ -195,7 +220,7 @@ Plain YAML with a kustomization, one namespace per user:
 3. `apptainer exec --no-home --no-mount tmp,cwd --pid --writable-tmpfs` with
    the ccbox bind list: `claude --version` runs, `/home/coder` shows the
    image content, `/workspace` is the project, nothing else from the PVC is
-   visible inside (`ls /home/coder/projects` must fail).
+   visible inside (`ls /home/coder/repos` must fail).
 4. Writes outside bound paths succeed and do not hit the session dir cap
    after raising it; a plugin install and an `npm install` in the project
    work.
@@ -224,11 +249,8 @@ Plain YAML with a kustomization, one namespace per user:
 
 ## Open questions
 
-- Target cluster: OpenShift version and RWX storage class (CephFS / ODF, EFS,
-  NFS). Cluster-admin available for the SCC?
-- Pod image name (`codebox-pod`?) and whether it should be Fedora like the
-  base or UBI9 like the Sardeenz worker.
-- Should `--with-credentials` files on the RWX PVC be acceptable, or should
-  credentials only ever come from Secrets on the cluster path?
-- Layout under the PVC: `/home/coder/projects/<name>` as the convention, or
-  free-form.
+- Pod image name: `codebox-pod`?
+- Minimum OpenShift version to document. The `/dev/fuse` CRI-O annotation
+  needs 4.15+; the spike ran on 4.21.
+- Per-backend re-checks: the spike validated EFS; CephFS still needs the SIF
+  conversion (EMLINK) and squashfuse-in-place gates re-run.
