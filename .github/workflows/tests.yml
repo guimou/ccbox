@@ -34,7 +34,8 @@ jobs:
           kubectl kustomize k8s/cluster > /dev/null
 
       - name: Egress firewall generator
-        run: k8s/gen-egress-firewall.sh | grep -q 'dnsName: api.anthropic.com'
+        run: |
+          k8s/gen-egress-firewall.sh | grep -q 'dnsName: api.anthropic.com'
 
       - name: Golden test of the rendered command line
         run: tests/render-test.sh
