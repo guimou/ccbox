@@ -7,7 +7,8 @@ Status: draft, not started. Branch `feat/kubernetes-apptainer`.
 - Cluster-admin is available, so the custom SCC is not a blocker.
 - The RWX storage class is a parameter. Targets include AWS EFS and CephFS;
   the only requirement is RWX. Nothing may depend on one backend's behavior.
-- The pod image is UBI9. All development tooling lives in the Fedora-based
+- The pod image is CentOS Stream 9 (UBI9 was the first choice, but its
+  repositories lack tmux). All development tooling lives in the Fedora-based
   harness images, hence in the SIFs; the pod only runs tmux and Apptainer.
 - The pod is the equivalent of today's host, credentials included: harness
   credential and settings files live on the PVC under `/home/coder`, exactly
@@ -145,18 +146,18 @@ real cluster (see the gate list below).
 
 ### 3. Pod image (`k8s/Containerfile`)
 
-Published as `quay.io/guimou/codebox-pod` (name to confirm). A thin UBI9
+Published as `quay.io/guimou/codebox-pod` (name to confirm). A thin CentOS Stream 9
 image, in the spirit of the Sardeenz `worker-base`: every development tool
 is in the SIFs, the pod only hosts tmux and Apptainer. Contents:
 
-- `registry.access.redhat.com/ubi9/ubi`, user `coder` UID 1000, home
+- `quay.io/centos/centos:stream9`, user `coder` UID 1000, home
   `/home/coder`.
 - From EPEL: `apptainer` (rootless package, not `apptainer-suid`),
   `squashfuse`, `fuse-overlayfs`, `fuse3`. `tzdata` with `/etc/localtime`
-  set (Apptainer bind-mounts it by default and stock UBI9 has neither it nor
+  set (Apptainer bind-mounts it by default and a minimal base has neither it nor
   `/etc/hosts` handling; the spike hit this).
 - `tmux`, `git`, `jq`, `vim-minimal`, `openssh-clients`, `bind-utils` from
-  UBI/EPEL; `gh` from the GitHub CLI RPM repository.
+  BaseOS/AppStream; `gh` from the GitHub CLI RPM repository.
 - The four launchers and `lib/*.sh` copied to `/usr/local/bin` (flat layout).
 - `/etc/apptainer/apptainer.conf` with a raised `sessiondir max size`.
 - Env: `CODEBOX_RUNTIME=apptainer`, `CODEBOX_SIF_DIR=/home/coder/.codebox/sifs`,
@@ -251,7 +252,7 @@ Plain YAML with a kustomization, one namespace per user:
    scenarios for the rendered `apptainer exec` line, `docs/usage.md`
    Runtimes section. Done on this branch; the gates below still have to be
    run on a cluster once phase 3 provides the pod.
-3. **Pod image and manifests.** `k8s/Containerfile` (UBI9), `k8s/entrypoint.sh`,
+3. **Pod image and manifests.** `k8s/Containerfile` (CentOS Stream 9), `k8s/entrypoint.sh`,
    `apptainer.conf` tweaks baked in the image, `k8s/cluster/` (SCC +
    ClusterRole), `k8s/base/` + `k8s/overlays/example/` (kustomize),
    `k8s/gen-egress-firewall.sh`, `build-pod.yml` CI job, `docs/kubernetes.md`,
