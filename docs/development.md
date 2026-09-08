@@ -118,7 +118,18 @@ The `-N` suffix increments from existing `{box}-v{version}-*` tags. If the compu
 
 The run is structured as four jobs:
 
-1. **bump** — on the weekly schedule (or a dispatch with `bump_versions`), looks up the latest upstream version of each harness (npm dist-tag `latest` for `@anthropic-ai/claude-code`, `opencode-ai`, `@qwen-code/qwen-code`, `@openai/codex`; the latest GitHub release for `can1357/oh-my-pi`), only ever moves a pin forward, commits the changed `*_VERSION` files to `main` as `chore: bump harness versions` and hands the new commit to the next jobs. Pushes made with the workflow token do not trigger workflows, which is why the release happens in the same run. On any other trigger the job is a no-op. Requirement: the `PR for main` ruleset must list the GitHub Actions app as a bypass actor, otherwise the push is rejected.
+1. **bump** — on the weekly schedule (or a dispatch with `bump_versions`), looks up the latest upstream version of each harness (npm dist-tag `latest` for `@anthropic-ai/claude-code`, `opencode-ai`, `@qwen-code/qwen-code`, `@openai/codex`; the latest GitHub release for `can1357/oh-my-pi`), only ever moves a pin forward, commits the changed `*_VERSION` files to `main` as `chore: bump harness versions [skip ci]` and hands the new commit to the next jobs (the `[skip ci]` keeps that push from starting a second release run; this run builds the bump commit itself). On any other trigger the job is a no-op.
+
+   The push uses a write-enabled **deploy key**: on a personal repository the `PR for main` ruleset cannot be bypassed by the GitHub Actions app, only by deploy keys. One-time setup:
+
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C 'ccbox release bump' -f bump-key
+   gh repo deploy-key add bump-key.pub --title 'release bump' --allow-write
+   gh secret set BUMP_DEPLOY_KEY < bump-key
+   rm bump-key bump-key.pub
+   ```
+
+   then, in Settings → Rules → Rulesets → `PR for main` → Add bypass, tick **Deploy keys**. Without the secret the bump job fails with an explicit error and nothing is built.
 2. **detect** — computes the harness matrix above from the bump commit.
 3. **base** — runs only if at least one harness needs a build. Calls `build-base.yml`, which computes the base content tag and skips the build when that tag already exists in `quay.io/guimou/codebox-base` (a forced refresh overwrites it).
 4. **build** — one job per harness in the matrix, `fail-fast: false`, each calling `build-and-push.yml` with the base tag from step 2 and its git tag. Every harness job builds, pushes, tags and creates its GitHub Release on its own, so a failure in one harness never blocks the others. Changelog ranges use the previous `{box}-v*` tag (with a fallback to legacy unprefixed `v*` tags for ccbox).
