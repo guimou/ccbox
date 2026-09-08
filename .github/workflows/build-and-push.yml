@@ -9,7 +9,7 @@ on:
   workflow_call:
     inputs:
       harness:
-        description: 'Harness to build: claude, opencode, qwencode, or codex'
+        description: 'Harness to build: claude, opencode, qwencode, codex, or omp'
         required: true
         type: string
       harness_version:
@@ -39,6 +39,7 @@ on:
           - opencode
           - qwencode
           - codex
+          - omp
       harness_version:
         description: 'Harness version (leave empty to use the version file)'
         required: false
@@ -87,6 +88,10 @@ jobs:
             codex)
               IMAGE_NAME="guimou/cxbox"
               VERSION_FILE="CODEX_VERSION"
+              ;;
+            omp)
+              IMAGE_NAME="guimou/ompbox"
+              VERSION_FILE="OMP_VERSION"
               ;;
             *)
               echo "Unknown harness: ${{ inputs.harness }}" >&2

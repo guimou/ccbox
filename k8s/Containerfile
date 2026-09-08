@@ -1,7 +1,7 @@
 # codebox-pod: the slim image a long-lived coding pod runs on Kubernetes /
 # OpenShift. The pod plays the role of the workstation: you rsh into it,
-# cd into a repo under ~/repos and run ccbox / ocbox / qcbox / cxbox exactly
-# as on a host. The launchers then start the harness with Apptainer from a
+# cd into a repo under ~/repos and run ccbox / ocbox / qcbox / cxbox / ompbox
+# exactly as on a host. The launchers then start the harness with Apptainer from a
 # SIF converted from the regular quay.io/guimou/<box> image.
 #
 # Nothing development-related is installed here: every tool the harness may
@@ -78,8 +78,8 @@ RUN groupadd -g 1000 coder && \
 
 # Launchers and the shared engine, flat layout (box-common.sh next to the
 # launchers, as for a ~/.local/bin install)
-COPY ccbox ocbox qcbox cxbox lib/box-common.sh k8s/entrypoint.sh /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/ccbox /usr/local/bin/ocbox /usr/local/bin/qcbox /usr/local/bin/cxbox \
+COPY ccbox ocbox qcbox cxbox ompbox lib/box-common.sh k8s/entrypoint.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/ccbox /usr/local/bin/ocbox /usr/local/bin/qcbox /usr/local/bin/cxbox /usr/local/bin/ompbox \
                /usr/local/bin/box-common.sh /usr/local/bin/entrypoint.sh
 
 ENV HOME=/home/coder \

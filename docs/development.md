@@ -6,13 +6,13 @@
 |------|-------------|
 | `Dockerfile.base` | Harness-independent base image (Fedora 44, OS packages, runtimes, tools), published as `quay.io/guimou/codebox-base` |
 | `Dockerfile` | Harness image built `FROM ${BASE_IMAGE}`, parameterized by `HARNESS`/`HARNESS_VERSION` build args |
-| `lib/box-common.sh` | Shared launcher engine (sourced by all four launchers): runtime-neutral session spec plus the Podman runtime backend |
+| `lib/box-common.sh` | Shared launcher engine (sourced by all five launchers): runtime-neutral session spec plus the Podman runtime backend |
 | `tests/render-test.sh` + `tests/golden/` | Golden test of the rendered `podman run` command line for every launcher (stub runtime, no container needed) |
-| `ccbox` / `ocbox` / `qcbox` / `cxbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
-| `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` | Harness version pin files |
+| `ccbox` / `ocbox` / `qcbox` / `cxbox` / `ompbox` | Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough) |
+| `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` / `OMP_VERSION` | Harness version pin files |
 | `os-packages.txt` | DNF packages to install (one per line) |
 | `firewall-domains.txt` | Allowed network domains common to all harnesses |
-| `firewall-domains-{claude,opencode,qwencode,codex}.txt` | Harness-specific allowed domains, concatenated with the common file at build time |
+| `firewall-domains-{claude,opencode,qwencode,codex,omp}.txt` | Harness-specific allowed domains, concatenated with the common file at build time |
 | `init-firewall.sh` | Firewall initialization script (iptables/ipset) |
 | `.github/workflows/release.yml` | Release workflow (detects which harnesses to build, builds the base once, then one job per harness) |
 | `.github/workflows/build-base.yml` | Reusable base image build (content-tagged, skipped when the tag exists) |
@@ -39,6 +39,7 @@ See [architecture.md](architecture.md) for how the base image, harness Dockerfil
 ./ocbox --build
 ./qcbox --build
 ./cxbox --build
+./ompbox --build
 
 # Also build the base image locally (after editing Dockerfile.base / os-packages.txt)
 ./ccbox --build-base
@@ -85,7 +86,7 @@ DEBUG=1 ccbox
 Launchers, the engine and the test script are shellcheck-clean:
 
 ```bash
-shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
+shellcheck ccbox ocbox qcbox cxbox ompbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
 ```
 
 The kustomizations render without a cluster: `kubectl kustomize k8s/overlays/example` and `kubectl kustomize k8s/cluster`.
@@ -127,11 +128,11 @@ Reusable workflow (also manually dispatchable with a `force` input). The base ta
 
 ### Build workflow (`build-and-push.yml`)
 
-Reusable workflow called once per harness by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex`) and optional version/tag/base overrides. It resolves the harness to its image repository and version file, verifies the base tag exists (derived from the commit when not given), builds `Dockerfile` with `BASE_IMAGE`, `HARNESS` and `HARNESS_VERSION` build args, pushes, and, when called with a `git_tag`, creates the git tag and GitHub Release. Build caches are scoped per harness (`type=gha,scope={harness}`).
+Reusable workflow called once per harness by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex` / `omp`) and optional version/tag/base overrides. It resolves the harness to its image repository and version file, verifies the base tag exists (derived from the commit when not given), builds `Dockerfile` with `BASE_IMAGE`, `HARNESS` and `HARNESS_VERSION` build args, pushes, and, when called with a `git_tag`, creates the git tag and GitHub Release. Build caches are scoped per harness (`type=gha,scope={harness}`).
 
 ### Image tags
 
-Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox`) with tags:
+Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox`, `quay.io/guimou/ompbox`) with tags:
 
 | Tag | Description |
 |-----|-------------|
@@ -142,7 +143,7 @@ Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guim
 ### Releasing a new harness version
 
 ```bash
-echo "2.1.37" > CLAUDE_VERSION      # or OPENCODE_VERSION / QWENCODE_VERSION / CODEX_VERSION
+echo "2.1.37" > CLAUDE_VERSION      # or OPENCODE_VERSION / QWENCODE_VERSION / CODEX_VERSION / OMP_VERSION
 git add CLAUDE_VERSION
 git commit -m "chore: bump Claude Code version to 2.1.37"
 git push origin main
@@ -155,7 +156,7 @@ To enable CI/CD pushes, configure GitHub repository secrets:
 1. **Create a Quay.io robot account:**
    - Log in to [quay.io](https://quay.io) → Account Settings → Robot Accounts
    - Create a robot account (e.g., `github_actions`)
-   - Grant **Write** permission to the `guimou/codebox-base`, `guimou/ccbox`, `guimou/ocbox`, `guimou/qcbox`, and `guimou/cxbox` repositories
+   - Grant **Write** permission to the `guimou/codebox-base`, `guimou/ccbox`, `guimou/ocbox`, `guimou/qcbox`, `guimou/cxbox`, and `guimou/ompbox` repositories
 2. **Add GitHub secrets** (repository Settings → Secrets and variables → Actions):
 
    | Secret | Value |
@@ -169,4 +170,5 @@ To enable CI/CD pushes, configure GitHub repository secrets:
 podman pull quay.io/guimou/ccbox:latest
 podman pull quay.io/guimou/ocbox:<version>
 podman pull quay.io/guimou/cxbox:<version>
+podman pull quay.io/guimou/ompbox:<version>
 ```

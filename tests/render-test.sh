@@ -42,6 +42,7 @@ mkdir -p "$FAKE_HOME" "$WORKSPACE" "$NPM_PREFIX" "$STUBS" "$OUT"
 touch "${FAKE_HOME}/.gitconfig" "${FAKE_HOME}/.claude.json"
 mkdir -p "${FAKE_HOME}/.config/gcloud" "${FAKE_HOME}/.claude" "${FAKE_HOME}/.qwen"
 touch "${FAKE_HOME}/.claude/status-line.sh" "${FAKE_HOME}/.claude/RULES.md" "${FAKE_HOME}/.qwen/.env"
+mkdir -p "${FAKE_HOME}/.omp/agent" && touch "${FAKE_HOME}/.omp/agent/AGENTS.md"
 
 # --- stubs ---------------------------------------------------------------
 
@@ -88,7 +89,7 @@ chmod +x "${STUBS}"/*
 # Wrappers are invoked through symlinks in a bin dir, like a real install
 BIN="${ROOT}/bin"
 mkdir -p "$BIN"
-for box in ccbox ocbox qcbox cxbox; do
+for box in ccbox ocbox qcbox cxbox ompbox; do
     ln -s "${REPO_DIR}/${box}" "${BIN}/${box}"
 done
 
@@ -111,6 +112,9 @@ SCENARIOS=(
     "cxbox-default|cxbox|"
     "cxbox-all-opts|cxbox|--with-firewall --with-credentials --with-gcloud --with-gitconfig"
     "cxbox-args|cxbox|-- --version"
+    "ompbox-default|ompbox|"
+    "ompbox-all-opts|ompbox|--with-firewall --with-credentials --with-gcloud --with-gitconfig"
+    "ompbox-args|ompbox|-- --version"
     # apptainer runtime (the pod-as-host case): no clipboard/npm-global, SIF image
     "apptainer-ccbox-default|ccbox|--runtime apptainer"
     "apptainer-ccbox-all-opts|ccbox|--runtime apptainer --with-credentials --with-gcloud --with-gitconfig --with-teams --with-tmux"
@@ -118,6 +122,7 @@ SCENARIOS=(
     "apptainer-ocbox-default|ocbox|--runtime apptainer --with-credentials"
     "apptainer-qcbox-default|qcbox|--runtime apptainer"
     "apptainer-cxbox-args|cxbox|--runtime apptainer -- --version"
+    "apptainer-ompbox-args|ompbox|--runtime apptainer -- --version"
     # runtime chosen by CODEBOX_RUNTIME, per-session scratch bound at /tmp
     "apptainer-env-var|ccbox|"
     "!apptainer-firewall|ccbox|--runtime apptainer --with-firewall"

@@ -1,6 +1,6 @@
 # Running on Kubernetes / OpenShift
 
-The launchers can run inside a long-lived pod instead of on your workstation. The pod plays the role of the host: you open a shell in it, `cd` into a repository under `~/repos`, and run `ccbox` / `ocbox` / `qcbox` / `cxbox` exactly as on a laptop. The harness then runs in an [Apptainer](https://apptainer.org/) container started from a SIF converted from the same `quay.io/guimou/<box>` image you use with Podman.
+The launchers can run inside a long-lived pod instead of on your workstation. The pod plays the role of the host: you open a shell in it, `cd` into a repository under `~/repos`, and run `ccbox` / `ocbox` / `qcbox` / `cxbox` / `ompbox` exactly as on a laptop. The harness then runs in an [Apptainer](https://apptainer.org/) container started from a SIF converted from the same `quay.io/guimou/<box>` image you use with Podman.
 
 What you keep from the workstation setup:
 
@@ -96,7 +96,7 @@ The launchers inside the pod have no version pin files, so they use `latest` unl
 | Path | Purpose |
 |---|---|
 | `~/repos/<repo>` | Repositories. One session sees exactly one of them |
-| `~/.claude/`, `~/.config/opencode/`, `~/.qwen/`, `~/.codex/` | Shared harness config and per-project state, as on a host (see [architecture.md](architecture.md)) |
+| `~/.claude/`, `~/.config/opencode/`, `~/.qwen/`, `~/.codex/`, `~/.omp/` | Shared harness config and per-project state, as on a host (see [architecture.md](architecture.md)) |
 | `~/.claude/.credentials.json` and the other credential files | Credentials, opt-in per launch with `--with-credentials`, as on a host |
 | `~/.codebox/sifs/` | SIF store, shared by every pod using this PVC |
 | `~/.codebox/sessions/` | Session markers for `--list-sessions` |

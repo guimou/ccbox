@@ -24,6 +24,7 @@ on:
       - 'ocbox'
       - 'qcbox'
       - 'cxbox'
+      - 'ompbox'
       - 'lib/**'
       - '.github/workflows/build-pod.yml'
   workflow_dispatch:

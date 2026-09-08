@@ -9,6 +9,7 @@ on:
       - 'ocbox'
       - 'qcbox'
       - 'cxbox'
+      - 'ompbox'
       - 'lib/**'
       - 'tests/**'
       - 'init-firewall.sh'
@@ -26,7 +27,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: shellcheck
-        run: shellcheck ccbox ocbox qcbox cxbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
+        run: shellcheck ccbox ocbox qcbox cxbox ompbox lib/box-common.sh init-firewall.sh tests/render-test.sh k8s/entrypoint.sh k8s/gen-egress-firewall.sh
 
       - name: Render the kustomizations
         run: |

@@ -8,7 +8,7 @@
 #   k8s/gen-egress-firewall.sh [harness...] > egressfirewall.yaml
 #   oc apply -n <namespace> -f egressfirewall.yaml
 #
-# With no argument all four harness overlays are included (one pod serves
+# With no argument all five harness overlays are included (one pod serves
 # all launchers). Only one EgressFirewall per namespace is allowed, and it
 # must be named "default". Cluster-internal traffic (DNS, the image
 # registry, the API) is not subject to EgressFirewall rules; pulling the
@@ -21,7 +21,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 harnesses=("$@")
-[[ ${#harnesses[@]} -gt 0 ]] || harnesses=(claude opencode qwencode codex)
+[[ ${#harnesses[@]} -gt 0 ]] || harnesses=(claude opencode qwencode codex omp)
 
 files=("${REPO_DIR}/firewall-domains.txt")
 for h in "${harnesses[@]}"; do

@@ -25,7 +25,7 @@ harness that can only see that project plus explicitly shared config), but with 
 long-lived pod as the "host" instead of a workstation.
 
 - The pod is the host. You `oc rsh` into it (or attach to tmux in it), navigate
-  the shared filesystem, and run `ccbox` / `ocbox` / `qcbox` / `cxbox` as today.
+  the shared filesystem, and run `ccbox` / `ocbox` / `qcbox` / `cxbox` / `ompbox` as today.
 - Harness containers become Apptainer runs of a SIF built from the existing OCI
   images. No new harness image pipeline.
 - One RWX PVC holds everything: home directory, projects, per-project harness
@@ -158,7 +158,7 @@ is in the SIFs, the pod only hosts tmux and Apptainer. Contents:
   `/etc/hosts` handling; the spike hit this).
 - `tmux`, `git`, `jq`, `vim-minimal`, `openssh-clients`, `bind-utils` from
   BaseOS/AppStream; `gh` from the GitHub CLI RPM repository.
-- The four launchers and `lib/*.sh` copied to `/usr/local/bin` (flat layout).
+- The five launchers and `lib/*.sh` copied to `/usr/local/bin` (flat layout).
 - `/etc/apptainer/apptainer.conf` with a raised `sessiondir max size`.
 - Env: `CODEBOX_RUNTIME=apptainer`, `CODEBOX_SIF_DIR=/home/coder/.codebox/sifs`,
   `APPTAINER_TMPDIR=/scratch`, `APPTAINER_CACHEDIR=/scratch/cache`,

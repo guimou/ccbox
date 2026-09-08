@@ -1,9 +1,9 @@
 #!/bin/bash
-# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox / cxbox).
+# Shared launcher engine for the harness containers (ccbox / ocbox / qcbox / cxbox / ompbox).
 #
 # This file is sourced by the thin per-harness wrappers, which must define
 # the following variables before sourcing:
-#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox, cxbox)
+#   BOX_NAME        - launcher/image name (ccbox, ocbox, qcbox, cxbox, ompbox)
 #   HARNESS_TITLE   - human-readable harness name (e.g. "Claude Code")
 #   HARNESS_CLI     - CLI binary to run inside the container
 #   REGISTRY_IMAGE  - registry repository (e.g. "guimou/ccbox")
@@ -11,6 +11,12 @@
 #   VERSION_FILE    - version pin file in the repo (e.g. "CLAUDE_VERSION")
 #   ENV_PASSTHROUGH_REGEX - grep -E regex of env var prefixes to forward
 #   ENV_PASSTHROUGH_VARS  - array of specific env var names to forward
+#   ENV_PASSTHROUGH_EXCLUDE_REGEX - optional grep -E regex of env var names to
+#                             never forward, even if ENV_PASSTHROUGH_REGEX
+#                             matches them (e.g. a var that must always come
+#                             from the mounted layout, not the host). Defaults
+#                             to empty (nothing excluded) when a wrapper does
+#                             not set it.
 #
 # And the following hook functions (all optional, defaults are no-ops):
 #   harness_parse_arg "$@"  - consume harness-specific CLI args; set ARG_SHIFT
@@ -1044,8 +1050,10 @@ box_main() {
     fi
 
     # Generic passthrough: forward harness-relevant env vars from host
+    : "${ENV_PASSTHROUGH_EXCLUDE_REGEX:=}"
     if [[ -n "$ENV_PASSTHROUGH_REGEX" ]]; then
         while IFS='=' read -r name value; do
+            [[ -n "$ENV_PASSTHROUGH_EXCLUDE_REGEX" && "$name" =~ $ENV_PASSTHROUGH_EXCLUDE_REGEX ]] && continue
             add_env "$name" "$value"
         done < <(env | grep -E "$ENV_PASSTHROUGH_REGEX")
     fi

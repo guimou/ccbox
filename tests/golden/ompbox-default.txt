@@ -1,0 +1,32 @@
+--hostname ompbox
+--name ompbox-demo-HASH-SESSION
+--rm
+--userns=keep-id:uid=1000,gid=1000
+-e ANTHROPIC_API_KEY=anthropic-stub
+-e AWS_REGION=eu-west-1
+-e GH_TOKEN=ghp_stubtoken
+-e GITHUB_TOKEN=ghp_stubtoken
+-e LANG=C.UTF-8
+-e NO_COLOR=1
+-e OPENAI_API_KEY=openai-stub
+-e PROJECT_NAME=demo
+-e TERM=xterm-256color
+-e TZ=UTC
+-it
+-v /etc/localtime:/etc/localtime:ro
+-v ROOT/home/.omp/agent/AGENTS.md:/home/coder/.omp/agent/AGENTS.md:ro,z
+-v ROOT/home/.omp/agent/commands:/home/coder/.omp/agent/commands:z
+-v ROOT/home/.omp/agent/extensions:/home/coder/.omp/agent/extensions:z
+-v ROOT/home/.omp/agent/hooks:/home/coder/.omp/agent/hooks:z
+-v ROOT/home/.omp/agent/instructions:/home/coder/.omp/agent/instructions:z
+-v ROOT/home/.omp/agent/prompts:/home/coder/.omp/agent/prompts:z
+-v ROOT/home/.omp/agent/rules:/home/coder/.omp/agent/rules:z
+-v ROOT/home/.omp/agent/skills:/home/coder/.omp/agent/skills:z
+-v ROOT/home/.omp/agent/tools:/home/coder/.omp/agent/tools:z
+-v ROOT/home/.omp/ompbox-projects/demo_HASH/agent:/home/coder/.omp/agent:z
+-v ROOT/npm-global:/home/coder/.npm-global:ro,z
+-v ROOT/repos/demo:/workspace:z
+-w /workspace
+--
+quay.io/guimou/ompbox:TAG
+omp

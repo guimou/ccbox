@@ -21,6 +21,7 @@ on:
       - 'OPENCODE_VERSION'
       - 'QWENCODE_VERSION'
       - 'CODEX_VERSION'
+      - 'OMP_VERSION'
       # Base image inputs (rebuild the base, then all harnesses)
       - 'Dockerfile.base'
       - 'os-packages.txt'
@@ -34,10 +35,12 @@ on:
       - 'firewall-domains-opencode.txt'
       - 'firewall-domains-qwencode.txt'
       - 'firewall-domains-codex.txt'
+      - 'firewall-domains-omp.txt'
       - 'ccbox'
       - 'ocbox'
       - 'qcbox'
       - 'cxbox'
+      - 'ompbox'
   schedule:
     # Weekly refresh of the base (Fedora updates) and all harnesses
     - cron: '0 4 * * 1'
@@ -145,6 +148,7 @@ jobs:
           add_harness opencode ocbox OPENCODE_VERSION ocbox firewall-domains-opencode.txt
           add_harness qwencode qcbox QWENCODE_VERSION qcbox firewall-domains-qwencode.txt
           add_harness codex    cxbox CODEX_VERSION    cxbox firewall-domains-codex.txt
+          add_harness omp      ompbox OMP_VERSION     ompbox firewall-domains-omp.txt
 
           echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
           echo "force_base=${FORCE_BASE}" >> $GITHUB_OUTPUT
