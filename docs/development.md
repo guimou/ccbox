@@ -112,15 +112,16 @@ Runs on pushes to `main` touching image/launcher files, and detects which harnes
 | Base input (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`) | Rebuild the base, then **all** harnesses | `{box}-v{version}-N` | `{version}-N` |
 | Shared harness file (`Dockerfile`, `firewall-domains.txt`, `lib/`) | Rebuild **all** harnesses (base reused) | `{box}-v{version}-N` | `{version}-N` |
 | Harness-specific file (launcher script, firewall overlay) | Rebuild **only** that harness | `{box}-v{version}-N` | `{version}-N` |
-| Weekly schedule / manual "rebuild all" dispatch | Force-rebuild the base (Fedora updates), then **all** harnesses | `{box}-v{version}-N` | `{version}-N` |
+| Weekly schedule / manual "rebuild all" dispatch | Bump the version pins to the latest upstream releases, force-rebuild the base (Fedora updates), then **all** harnesses | `{box}-v{version}` for bumped harnesses, `{box}-v{version}-N` for the others | `{version}` / `{version}-N` |
 
 The `-N` suffix increments from existing `{box}-v{version}-*` tags. If the computed tag already exists, that harness is skipped.
 
-The run is structured as three jobs:
+The run is structured as four jobs:
 
-1. **detect** — computes the harness matrix above.
-2. **base** — runs only if at least one harness needs a build. Calls `build-base.yml`, which computes the base content tag and skips the build when that tag already exists in `quay.io/guimou/codebox-base` (a forced refresh overwrites it).
-3. **build** — one job per harness in the matrix, `fail-fast: false`, each calling `build-and-push.yml` with the base tag from step 2 and its git tag. Every harness job builds, pushes, tags and creates its GitHub Release on its own, so a failure in one harness never blocks the others. Changelog ranges use the previous `{box}-v*` tag (with a fallback to legacy unprefixed `v*` tags for ccbox).
+1. **bump** — on the weekly schedule (or a dispatch with `bump_versions`), looks up the latest upstream version of each harness (npm dist-tag `latest` for `@anthropic-ai/claude-code`, `opencode-ai`, `@qwen-code/qwen-code`, `@openai/codex`; the latest GitHub release for `can1357/oh-my-pi`), only ever moves a pin forward, commits the changed `*_VERSION` files to `main` as `chore: bump harness versions` and hands the new commit to the next jobs. Pushes made with the workflow token do not trigger workflows, which is why the release happens in the same run. On any other trigger the job is a no-op. Requirement: the `PR for main` ruleset must list the GitHub Actions app as a bypass actor, otherwise the push is rejected.
+2. **detect** — computes the harness matrix above from the bump commit.
+3. **base** — runs only if at least one harness needs a build. Calls `build-base.yml`, which computes the base content tag and skips the build when that tag already exists in `quay.io/guimou/codebox-base` (a forced refresh overwrites it).
+4. **build** — one job per harness in the matrix, `fail-fast: false`, each calling `build-and-push.yml` with the base tag from step 2 and its git tag. Every harness job builds, pushes, tags and creates its GitHub Release on its own, so a failure in one harness never blocks the others. Changelog ranges use the previous `{box}-v*` tag (with a fallback to legacy unprefixed `v*` tags for ccbox).
 
 ### Base workflow (`build-base.yml`)
 
@@ -128,7 +129,7 @@ Reusable workflow (also manually dispatchable with a `force` input). The base ta
 
 ### Build workflow (`build-and-push.yml`)
 
-Reusable workflow called once per harness by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex` / `omp`) and optional version/tag/base overrides. It resolves the harness to its image repository and version file, verifies the base tag exists (derived from the commit when not given), builds `Dockerfile` with `BASE_IMAGE`, `HARNESS` and `HARNESS_VERSION` build args, pushes, and, when called with a `git_tag`, creates the git tag and GitHub Release. Build caches are scoped per harness (`type=gha,scope={harness}`).
+Reusable workflow called once per harness by the release matrix, also manually dispatchable from the Actions UI with a `harness` input (`claude` / `opencode` / `qwencode` / `codex` / `omp`) and optional version/tag/base overrides. An optional `ref` input selects the commit to build and tag (the release workflow passes its version-bump commit). It resolves the harness to its image repository and version file, verifies the base tag exists (derived from the commit when not given), builds `Dockerfile` with `BASE_IMAGE`, `HARNESS` and `HARNESS_VERSION` build args, pushes, and, when called with a `git_tag`, creates the git tag and GitHub Release. Build caches are scoped per harness (`type=gha,scope={harness}`).
 
 ### Image tags
 
@@ -141,6 +142,8 @@ Each harness pushes to its own repository (`quay.io/guimou/ccbox`, `quay.io/guim
 | `abc1234` | Git commit SHA (short) |
 
 ### Releasing a new harness version
+
+The weekly run bumps every pin automatically (see above). To release a specific version by hand:
 
 ```bash
 echo "2.1.37" > CLAUDE_VERSION      # or OPENCODE_VERSION / QWENCODE_VERSION / CODEX_VERSION / OMP_VERSION
