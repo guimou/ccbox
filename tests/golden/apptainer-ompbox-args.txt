@@ -1,0 +1,35 @@
+--bind /etc/localtime:/etc/localtime:ro
+--bind ROOT/home/.omp/agent/AGENTS.md:/home/coder/.omp/agent/AGENTS.md:ro
+--bind ROOT/home/.omp/agent/commands:/home/coder/.omp/agent/commands
+--bind ROOT/home/.omp/agent/extensions:/home/coder/.omp/agent/extensions
+--bind ROOT/home/.omp/agent/hooks:/home/coder/.omp/agent/hooks
+--bind ROOT/home/.omp/agent/instructions:/home/coder/.omp/agent/instructions
+--bind ROOT/home/.omp/agent/prompts:/home/coder/.omp/agent/prompts
+--bind ROOT/home/.omp/agent/rules:/home/coder/.omp/agent/rules
+--bind ROOT/home/.omp/agent/skills:/home/coder/.omp/agent/skills
+--bind ROOT/home/.omp/agent/tools:/home/coder/.omp/agent/tools
+--bind ROOT/home/.omp/ompbox-projects/demo_HASH/agent:/home/coder/.omp/agent
+--bind ROOT/repos/demo:/workspace
+--cleanenv
+--env ANTHROPIC_API_KEY=anthropic-stub
+--env AWS_REGION=eu-west-1
+--env CODEBOX_SESSION=ompbox-demo-HASH-SESSION
+--env GH_TOKEN=ghp_stubtoken
+--env GITHUB_TOKEN=ghp_stubtoken
+--env LANG=C.UTF-8
+--env NO_COLOR=1
+--env OPENAI_API_KEY=openai-stub
+--env PROJECT_NAME=demo
+--env TERM=xterm-256color
+--env TZ=UTC
+--ipc
+--no-home
+--no-mount tmp,cwd
+--pid
+--pwd /workspace
+--userns
+--writable-tmpfs
+--
+ROOT/home/.codebox/sifs/ompbox-TAG.sif
+omp
+--version

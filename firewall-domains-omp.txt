@@ -1,0 +1,23 @@
+# Allowed domains for the firewall - Oh My Pi specific
+
+# Anthropic API (Claude models)
+api.anthropic.com
+
+# OpenAI API (model responses for API-key auth) and OAuth (ChatGPT sign-in)
+api.openai.com
+auth.openai.com
+chatgpt.com
+
+# Other supported providers
+generativelanguage.googleapis.com
+openrouter.ai
+api.groq.com
+api.mistral.ai
+api.x.ai
+api.deepseek.com
+
+# Oh My Pi install/update scripts and website
+omp.sh
+
+# Optional /collab relay (opt-in feature, off by default)
+my.omp.sh

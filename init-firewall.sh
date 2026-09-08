@@ -1,5 +1,5 @@
 #!/bin/bash
-# Firewall initialization script for the harness container (ccbox/ocbox/qcbox/cxbox)
+# Firewall initialization script for the harness container (ccbox/ocbox/qcbox/cxbox/ompbox)
 # Restricts network access to allowed domains only
 
 set -e

@@ -128,6 +128,7 @@ ENV PATH="/home/coder/.npm-global/bin:/home/coder/.local/bin:${PATH}"
 
 # Disable auto-updaters in container (version controlled via image build).
 # Each harness only reads its own variable; setting all is harmless.
-# (Codex has no such env var: cxbox passes -c check_for_update_on_startup=false.)
+# (Codex has no such env var: cxbox passes -c check_for_update_on_startup=false;
+# Oh My Pi is pinned via the PI_CONFIG_FILES overlay baked in Dockerfile.)
 ENV DISABLE_AUTOUPDATER=1
 ENV OPENCODE_DISABLE_AUTOUPDATE=1

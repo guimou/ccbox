@@ -4,6 +4,9 @@
 # Qwen Code local settings
 .qwen/settings.json
 
+# Oh My Pi project-level config/state (written when modelRoleStorage=project)
+.omp/
+
 # Playwright MCP logs
 .playwright-mcp/
 

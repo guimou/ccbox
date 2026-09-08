@@ -1,6 +1,6 @@
 # Architecture
 
-One repository produces four container images and four launchers from a shared base image, a harness Dockerfile and a launcher engine:
+One repository produces five container images and five launchers from a shared base image, a harness Dockerfile and a launcher engine:
 
 | Launcher | Harness | Image | Version pin file | Firewall overlay |
 |----------|---------|-------|------------------|------------------|
@@ -8,6 +8,7 @@ One repository produces four container images and four launchers from a shared b
 | `ocbox` | [OpenCode](https://opencode.ai) | `quay.io/guimou/ocbox` | `OPENCODE_VERSION` | `firewall-domains-opencode.txt` |
 | `qcbox` | [Qwen Code](https://github.com/QwenLM/qwen-code) | `quay.io/guimou/qcbox` | `QWENCODE_VERSION` | `firewall-domains-qwencode.txt` |
 | `cxbox` | [Codex CLI](https://github.com/openai/codex) | `quay.io/guimou/cxbox` | `CODEX_VERSION` | `firewall-domains-codex.txt` |
+| `ompbox` | [Oh My Pi](https://github.com/can1357/oh-my-pi) | `quay.io/guimou/ompbox` | `OMP_VERSION` | `firewall-domains-omp.txt` |
 
 ## Design Principles
 
@@ -17,16 +18,16 @@ One repository produces four container images and four launchers from a shared b
 - **Host integration where it helps** — clipboard/display, audio, timezone, gcloud credentials (read-only, opt-in via `--with-gcloud`), host gitconfig (read-only, opt-in via `--with-gitconfig`), harness credentials (read-write, opt-in via `--with-credentials`), GitHub token, and host-installed global npm packages (read-only) are connected from the host.
 - **Rootless and SELinux-friendly** — Podman rootless with `--userns=keep-id`, `:z` volume labels on Linux.
 
-## One Base, Four Images
+## One Base, Five Images
 
 The image is built in two stages, from two Dockerfiles:
 
-**`Dockerfile.base` → `quay.io/guimou/codebox-base`.** All harness-independent layers: Fedora 44 base, OS packages, language runtimes, dev tools, Rust toolchain, firewall script, `coder` user and environment setup. It never references a harness. CI builds it once and tags it by content — the short SHA of the last commit touching its inputs (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`) — plus `latest`. A harness-only change therefore never rebuilds the base, and a base change builds it exactly once for all four harnesses. Because the four images start from the *same* base tag, they always share an identical package set.
+**`Dockerfile.base` → `quay.io/guimou/codebox-base`.** All harness-independent layers: Fedora 44 base, OS packages, language runtimes, dev tools, Rust toolchain, firewall script, `coder` user and environment setup. It never references a harness. CI builds it once and tags it by content — the short SHA of the last commit touching its inputs (`Dockerfile.base`, `os-packages.txt`, `init-firewall.sh`) — plus `latest`. A harness-only change therefore never rebuilds the base, and a base change builds it exactly once for all five harnesses. Because the five images start from the *same* base tag, they always share an identical package set.
 
-**`Dockerfile` → the four harness images.** Starts `FROM ${BASE_IMAGE}` and is parameterized by three build args:
+**`Dockerfile` → the five harness images.** Starts `FROM ${BASE_IMAGE}` and is parameterized by three build args:
 
 - `BASE_IMAGE` — the base to build on (CI pins the content tag; the launcher passes a local `codebox-base:latest` or the published `latest`).
-- `HARNESS` — `claude`, `opencode`, `qwencode`, or `codex`; selects which single CLI is installed and which firewall overlay is baked in.
+- `HARNESS` — `claude`, `opencode`, `qwencode`, `codex`, or `omp`; selects which single CLI is installed and which firewall overlay is baked in.
 - `HARNESS_VERSION` — the harness version to install (empty means latest).
 
 The harness stage is small and fast, and each harness build is independent of the others. It:
@@ -37,10 +38,11 @@ The harness stage is small and fast, and each harness build is independent of th
    - `opencode` → `npm install -g opencode-ai@<version>`
    - `qwencode` → `npm install -g @qwen-code/qwen-code@<version>`, plus a baked `/etc/qwen-code/settings.json` that disables auto-update and Qwen's own sandbox (to avoid sandbox-in-container nesting)
    - `codex` → `npm install -g @openai/codex@<version>` (npm wrapper that resolves to a per-platform native binary). Codex has no system-level config, so the `cxbox` launcher disables Codex's own sandbox (`sandbox_mode="danger-full-access"`, the container is the sandbox and bubblewrap/Landlock cannot nest in it) and the startup update check via `-c` overrides
+   - `omp` → no npm: the prebuilt release binary (`omp-linux-{x64,arm64}`) is downloaded from GitHub Releases and checksum-verified against `SHA256SUMS.txt`. Oh My Pi's native addons (~340 MB) are extracted at build time (`omp config path`), not on first container run, and the startup update check is disabled through a baked config overlay loaded via `PI_CONFIG_FILES`
 
 Auto-updaters are disabled for all harnesses — versions are controlled by the pin files and image builds.
 
-## One Engine, Four Launchers
+## One Engine, Five Launchers
 
 The launchers are thin wrappers around a shared engine, `lib/box-common.sh`:
 
@@ -59,31 +61,31 @@ The wrappers locate the engine relative to their (symlink-resolved) location, su
 - **Container name**: `{box}-{project}-{hash}-{session-id}` — multiple sessions can run simultaneously in the same project, sharing project data
 - **Firewall**: optional (`--with-firewall`), iptables/ipset allowlist, requires `NET_ADMIN`/`NET_RAW` (added automatically), Linux only
 
-> **Breaking change:** the container user and home folder were renamed from `claude` to `coder`. Images built before this change use `/home/claude`; rebuild or re-pull (`ccbox --build` / re-pull from the registry) so mounts line up with `/home/coder`. Host-side data is unaffected — `~/.claude/`, `~/.local/share/ocbox-projects/`, `~/.qwen/qcbox-projects/`, and `~/.codex/` are unchanged; only the in-container home path moved.
+> **Breaking change:** the container user and home folder were renamed from `claude` to `coder`. Images built before this change use `/home/claude`; rebuild or re-pull (`ccbox --build` / re-pull from the registry) so mounts line up with `/home/coder`. Host-side data is unaffected — `~/.claude/`, `~/.local/share/ocbox-projects/`, `~/.qwen/qcbox-projects/`, `~/.codex/`, and `~/.omp/` are unchanged; only the in-container home path moved.
 
 ## The Project Isolation Problem
 
-Every project mounts at `/workspace` inside its container. Harnesses that key their internal state by project *path* (OpenCode, Qwen Code, Codex) would therefore collide: every project would look like the same project.
+Every project mounts at `/workspace` inside its container. Harnesses that key their internal state by project *path* (OpenCode, Qwen Code, Codex, Oh My Pi) would therefore collide: every project would look like the same project.
 
 The launchers solve this **host-side**: each project gets its own host directory (keyed by `{sanitized-name}_{md5-hash-of-path}`) which is mounted *as* the harness's data/state directory inside the container. Shared items are file-mounted on top; the credential file is only shared when `--with-credentials` is passed.
 
 ## Per-Harness Mounts
 
-Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `--with-credentials` (the harness credential file, rw: `.credentials.json` for ccbox, `auth.json` for ocbox, `oauth_creds.json` for qcbox, `auth.json` for cxbox).
+Common to all launchers (handled by the engine): workspace, clipboard/display, PulseAudio, timezone, npm-global (ro), GitHub token env. Opt-in host mounts: `--with-gcloud` (gcloud, ro), `--with-gitconfig` (gitconfig, ro), `--with-credentials` (the harness credential file, rw: `.credentials.json` for ccbox, `auth.json` for ocbox, `oauth_creds.json` for qcbox, `auth.json` for cxbox; ro for ompbox: `.env` and `agent/.env`).
 
 ### What credentials can reach the container
 
 Three independent channels; only one is gated by a flag. A container is credential-free only if **all three** carry no key:
 
-| Channel | Always or opt-in? | ccbox | ocbox | qcbox | cxbox |
-|---------|-------------------|-------|-------|-------|-------|
-| **Credential store file** (OAuth session / API key written by the harness) | **Opt-in** — only with `--with-credentials` | `~/.claude/.credentials.json` | `~/.local/share/opencode/auth.json` | `~/.qwen/oauth_creds.json` | `~/.codex/auth.json` |
-| **Main config** (the settings/config the harness needs to run; always mounted so the harness behaves correctly) | **Always** | `~/.claude/settings.json`, `settings.local.json`, `~/.claude.json` | whole `~/.config/opencode/` dir (incl. `opencode.json`) | `~/.qwen/settings.json` (+ home `~/.qwen/.env` ro if present) | `~/.codex/config.toml` (copied into the per-project dir at launch) |
-| **Forwarded host env vars** (prefix match + a few specific vars; see `ENV_PASSTHROUGH_REGEX` in each wrapper) | **Always** | `ANTHROPIC_*`, `CLAUDE_CODE_*`, `CLAUDE_AX_*`, `CLAUDE_ENABLE_*`, `CLAUDE_AUTOCOMPACT_*`, `AWS_*`, `OTEL_*`, a few specific | `OPENCODE_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `AWS_*` | `QWEN_*`, `OPENAI_*`, `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*` | `CODEX_*`, `OPENAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `AWS_*` |
+| Channel | Always or opt-in? | ccbox | ocbox | qcbox | cxbox | ompbox |
+|---------|-------------------|-------|-------|-------|-------|--------|
+| **Credential store file** (OAuth session / API key written by the harness) | **Opt-in** — only with `--with-credentials` | `~/.claude/.credentials.json` | `~/.local/share/opencode/auth.json` | `~/.qwen/oauth_creds.json` | `~/.codex/auth.json` | `~/.omp/.env` + `~/.omp/agent/.env` (ro); OAuth tokens live in the per-project `agent.db` instead and are never shared |
+| **Main config** (the settings/config the harness needs to run; always mounted so the harness behaves correctly) | **Always** | `~/.claude/settings.json`, `settings.local.json`, `~/.claude.json` | whole `~/.config/opencode/` dir (incl. `opencode.json`) | `~/.qwen/settings.json` (+ home `~/.qwen/.env` ro if present) | `~/.codex/config.toml` (copied into the per-project dir at launch) | `~/.omp/agent/config.yml` (copied into the per-project dir at launch) |
+| **Forwarded host env vars** (prefix match + a few specific vars; see `ENV_PASSTHROUGH_REGEX` in each wrapper) | **Always** | `ANTHROPIC_*`, `CLAUDE_CODE_*`, `CLAUDE_AX_*`, `CLAUDE_ENABLE_*`, `CLAUDE_AUTOCOMPACT_*`, `AWS_*`, `OTEL_*`, a few specific | `OPENCODE_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `AWS_*` | `QWEN_*`, `OPENAI_*`, `DASHSCOPE_*`, `BAILIAN_*`, `MODELSCOPE_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*` | `CODEX_*`, `OPENAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `AWS_*` | `OMP_*`, `PI_*` (excluding the state-relocating vars), `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `GEMINI_*`, `GOOGLE_*`, `AZURE_*`, `DEEPSEEK_*`, `MISTRAL_*`, `XAI_*`, `GROQ_*`, `QWEN_*`, `DASHSCOPE_*`, `COPILOT_*`, `AWS_*` |
 
 The key point that surprises people: **`--with-credentials` does not control the main config or the env vars.** If an API key is stored in the always-mounted config (an `"env"` block, or a provider `apiKey`/`envKey`), or is exported on the host and matches a forwarded prefix, it reaches the container whether or not `--with-credentials` is passed. That is the intended trade-off for mounting the config unconditionally — the harness needs its config, and whatever is inside that config comes along. See [usage.md → API Provider Configuration](usage.md#api-provider-configuration) and [usage.md → Credentials](usage.md#credentials) for how to keep a key out (forwarded env var, or a project-local override file instead of the shared config).
 
-How each harness *consumes* a key differs — ccbox reads standard env vars directly, ocbox uses the store file or the provider's declared env var (custom providers use `{env:VAR}` in config), qcbox resolves the env var named by `envKey` with priority shell > auto-loaded `.env` > settings `env` block, and cxbox reads `OPENAI_API_KEY` directly or uses the ChatGPT OAuth session in `auth.json` (custom providers via `model_providers` in `config.toml`). Details in [usage.md](usage.md#how-each-harness-reads-the-key).
+How each harness *consumes* a key differs — ccbox reads standard env vars directly, ocbox uses the store file or the provider's declared env var (custom providers use `{env:VAR}` in config), qcbox resolves the env var named by `envKey` with priority shell > auto-loaded `.env` > settings `env` block, cxbox reads `OPENAI_API_KEY` directly or uses the ChatGPT OAuth session in `auth.json` (custom providers via `model_providers` in `config.toml`), and ompbox reads a provider's standard env var directly or a dotenv value from `~/.omp/.env` / `~/.omp/agent/.env`. Details in [usage.md](usage.md#how-each-harness-reads-the-key).
 
 ### ccbox (Claude Code)
 
@@ -179,16 +181,35 @@ An optional `~/.qwen/.env` is mounted read-only if present.
 
 Codex stores all state under `~/.codex` (`CODEX_HOME` is intentionally not forwarded into the container), keyed by project path. The per-project host directory is mounted as the container's entire `~/.codex`, so sessions, the state DB, and memories never mix across projects; the shared `config.toml` is **copied** into it at launch (seeded on first run, refreshed whenever the host file is newer) rather than bind-mounted, because Codex saves config edits (project trust, `/model`, …) by renaming a temp file over `config.toml`, which fails on a single-file bind mount. Settings changed inside the container therefore stay per-project and are replaced the next time the host file changes; edit `~/.codex/config.toml` on the host for global changes. With `--with-credentials` the shared `auth.json` is mounted on top so credentials stay global (Codex rewrites it in place, so a file mount is fine there). Without the flag `codex login` inside the container writes `auth.json` into the per-project data dir, so it does not persist to the host file or to other projects.
 
+### ompbox (Oh My Pi)
+
+| Location | Purpose | Scope |
+|----------|---------|-------|
+| `~/.omp/agent/config.yml` | Global config (model, providers, settings); copied into each per-project dir at launch | Shared (source of truth) |
+| `~/.omp/agent/{commands,rules,prompts,instructions,skills,hooks,tools,extensions}/` | Shareable config directories | Shared (rw, bind-mounted) |
+| `~/.omp/agent/{SYSTEM.md,APPEND_SYSTEM.md,RULES.md,TITLE_SYSTEM.md,AGENTS.md,models.yml,mcp.json,keybindings.json}` | Shareable config files, when present on the host | Shared (ro, bind-mounted) |
+| `~/.omp/.env`, `~/.omp/agent/.env` | Dotenv API keys (opt-in, `--with-credentials`) | Shared (ro, not mounted by default) |
+| `~/.omp/ompbox-projects/{name}_{hash}/agent/` | `agent.db` (+ `-wal`/`-shm`), sessions, blobs, terminal sessions, history, and the `config.yml` copy (mounted as the container `~/.omp/agent`) | Per-project |
+
+Oh My Pi keeps three kinds of state, each with a different constraint on how it can be mounted:
+
+- **`agent.db`** is a SQLite database in WAL mode holding OAuth tokens, `/login`-saved API keys, settings, usage stats, model performance data, and the memory store — the memory store is keyed by working directory, which inside the container is always `/workspace`. Sharing it across projects would therefore mix every project's memories together, so it stays strictly per-project and is never bind-mounted as a single file (WAL mode also makes a single-file mount unsafe: the `-wal`/`-shm` companions need to live alongside it on the same filesystem).
+- **`config.yml`** is saved by omp via write-temp-then-rename, the same pattern Codex uses for `config.toml`, so it cannot be a single-file bind mount (rename over a bind-mounted file fails with `EBUSY`). It is copied into the per-project dir at launch instead — seeded on first run, refreshed whenever the host file is newer — exactly like cxbox's `config.toml`.
+- **Shared config directories and files** under `~/.omp/agent/` (commands, rules, prompts, instructions, skills, hooks, tools, extensions, plus the user-authored prompt/config files above) are ordinary files or directories that omp does not rewrite in place, so they are bind-mounted directly from the host: the directories read-write, the files read-only, and only when they exist on the host.
+
+`--with-credentials` mounts the two dotenv files read-only; it does not and cannot share `agent.db`, so `/login` (browser OAuth, or headless by pasting the callback URL) always stays local to the project it was run in.
+
 ## Firewall
 
 When launched with `--with-firewall` (Linux only), outbound connections are restricted to an allowlist baked into each image at build time from two files:
 
 - `firewall-domains.txt` — common to all harnesses: GitHub (`github.com`, `api.github.com`, `objects.githubusercontent.com`, plus their IP ranges), npm registry, Python packages (`pypi.org`, `files.pythonhosted.org`), Rust packages (`crates.io`, `static.crates.io`)
-- `firewall-domains-{claude,opencode,qwencode,codex}.txt` — harness-specific:
+- `firewall-domains-{claude,opencode,qwencode,codex,omp}.txt` — harness-specific:
   - **claude**: `api.anthropic.com`, `statsig.anthropic.com`, `claude.ai`, `code.claude.com`, `sentry.io`
   - **opencode**: `opencode.ai`, `api.opencode.ai`, `models.dev`, plus common provider endpoints
   - **qwencode**: `chat.qwen.ai`, `portal.qwen.ai`, DashScope endpoints, plus common provider endpoints
   - **codex**: `api.openai.com`, `auth.openai.com`, `chatgpt.com`, plus common provider endpoints
+  - **omp**: `omp.sh` (install/update scripts), `my.omp.sh` (opt-in `/collab` relay), plus common provider endpoints (`api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.groq.com`, `api.mistral.ai`, `api.x.ai`, `api.deepseek.com`)
 
 `init-firewall.sh` resolves the allowlist into an ipset at container start and installs default-deny iptables rules.
 

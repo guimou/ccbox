@@ -1,10 +1,11 @@
 # Containerized AI coding harness development environment - HARNESS image
 #
-# One Dockerfile builds four images, selected via the HARNESS build arg:
+# One Dockerfile builds five images, selected via the HARNESS build arg:
 #   HARNESS=claude   -> ccbox (Claude Code)
 #   HARNESS=opencode -> ocbox (OpenCode)
 #   HARNESS=qwencode -> qcbox (Qwen Code)
 #   HARNESS=codex    -> cxbox (Codex CLI)
+#   HARNESS=omp      -> ompbox (Oh My Pi)
 #
 # Everything harness-independent lives in Dockerfile.base and is consumed
 # here through BASE_IMAGE (a published quay.io/guimou/codebox-base tag, or a
@@ -17,7 +18,11 @@
 ARG BASE_IMAGE=quay.io/guimou/codebox-base:latest
 FROM ${BASE_IMAGE}
 
-# Which harness to install: claude | opencode | qwencode | codex
+# Provided by podman/buildah on multi-arch builds; falls back to `uname -m`
+# below for engines that do not set it (e.g. a plain `docker build`).
+ARG TARGETARCH
+
+# Which harness to install: claude | opencode | qwencode | codex | omp
 ARG HARNESS=claude
 # Harness version (empty = latest, or a specific version like "2.1.226")
 ARG HARNESS_VERSION=""
@@ -89,6 +94,20 @@ RUN set -eu; \
         # as the whole ~/.codex (config.toml / auth.json are mounted on top)
         mkdir -p /home/coder/.codex && \
         chown -R coder:coder /home/coder/.codex ;; \
+    omp) \
+        arch="${TARGETARCH:-$(uname -m)}"; \
+        case "$arch" in amd64|x86_64) asset=omp-linux-x64 ;; arm64|aarch64) asset=omp-linux-arm64 ;; *) echo "Unsupported arch: $arch" >&2; exit 1 ;; esac; \
+        if [ -n "${HARNESS_VERSION}" ]; then base="https://github.com/can1357/oh-my-pi/releases/download/v${HARNESS_VERSION}"; \
+        else base="https://github.com/can1357/oh-my-pi/releases/latest/download"; fi; \
+        curl -fsSL "${base}/${asset}" -o /usr/local/bin/omp && \
+        curl -fsSL "${base}/SHA256SUMS.txt" -o /tmp/omp.sums && \
+        awk -v a="$asset" '{sub(/^\*/,"",$2)} $2==a{print $1"  /usr/local/bin/omp"}' /tmp/omp.sums | sha256sum -c - && rm -f /tmp/omp.sums && \
+        chmod 0755 /usr/local/bin/omp && \
+        # Mount targets: per-project agent dir + the two opt-in dotenv files (empty placeholders)
+        mkdir -p /home/coder/.omp/agent && touch /home/coder/.omp/.env /home/coder/.omp/agent/.env && \
+        chown -R coder:coder /home/coder/.omp && \
+        # System defaults: pin version (no startup update check); loaded via PI_CONFIG_FILES
+        mkdir -p /etc/codebox && printf 'startup:\n  checkUpdate: false\n' > /etc/codebox/omp-config.yml ;; \
     *) echo "Unknown HARNESS: ${HARNESS}" >&2; exit 1 ;; \
     esac
 
@@ -101,6 +120,21 @@ RUN if [ "${HARNESS}" = "claude" ]; then \
         else \
             curl -fsSL https://claude.ai/install.sh | bash -s -- "${HARNESS_VERSION}"; \
         fi; \
+    fi
+
+# System defaults overlay for Oh My Pi (pins startup.checkUpdate off); other
+# harnesses ignore this env var. Set unconditionally since ENV cannot be
+# scoped to one arm of the case above.
+ENV PI_CONFIG_FILES=/etc/codebox/omp-config.yml
+
+# Oh My Pi extracts its native addons (~340 MB) into ~/.omp/natives on first
+# run; do it at build time (omp harness only). `omp config path` also creates
+# ~/.omp/agent/agent.db* and ~/.omp/logs; wipe the agent dir afterwards so the
+# launcher's per-project mount target starts clean.
+RUN if [ "${HARNESS}" = "omp" ]; then \
+        set -e; \
+        omp config path >/dev/null; \
+        rm -rf /home/coder/.omp/agent/* && touch /home/coder/.omp/agent/.env; \
     fi
 
 # Set working directory to workspace

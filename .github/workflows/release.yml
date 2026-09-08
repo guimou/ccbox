@@ -11,6 +11,17 @@ name: Release
 # A weekly scheduled run (and the manual "rebuild all" dispatch) forces a
 # base rebuild to pick up Fedora package updates, then rebuilds every harness
 # as a -N suffixed release of its current pinned version.
+#
+# The scheduled run (and a dispatch with bump_versions) first runs the bump
+# job: it looks up the latest upstream version of every harness, commits the
+# changed version pin files straight to main, and the rest of the run builds
+# from that commit, so a bumped harness is released as a plain {box}-v{version}
+# and the others as -N rebuilds. The push is made with a write-enabled deploy
+# key (secret BUMP_DEPLOY_KEY) because on a personal repository the "PR for
+# main" ruleset can only be bypassed by deploy keys, not by the Actions app;
+# the bump commit carries [skip ci] so that push does not start a second
+# release run (the release happens in this same run). Setup: see
+# docs/development.md, "Release workflow".
 
 on:
   push:
@@ -21,6 +32,7 @@ on:
       - 'OPENCODE_VERSION'
       - 'QWENCODE_VERSION'
       - 'CODEX_VERSION'
+      - 'OMP_VERSION'
       # Base image inputs (rebuild the base, then all harnesses)
       - 'Dockerfile.base'
       - 'os-packages.txt'
@@ -34,10 +46,12 @@ on:
       - 'firewall-domains-opencode.txt'
       - 'firewall-domains-qwencode.txt'
       - 'firewall-domains-codex.txt'
+      - 'firewall-domains-omp.txt'
       - 'ccbox'
       - 'ocbox'
       - 'qcbox'
       - 'cxbox'
+      - 'ompbox'
   schedule:
     # Weekly refresh of the base (Fedora updates) and all harnesses
     - cron: '0 4 * * 1'
@@ -48,9 +62,115 @@ on:
         required: false
         type: boolean
         default: true
+      bump_versions:
+        description: 'Bump the version pin files to the latest upstream releases first (as the weekly run does)'
+        required: false
+        type: boolean
+        default: false
+
+# One release run at a time: a manual dispatch must not bump and push while
+# the weekly run is doing the same
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  # Bump the version pin files to the latest upstream releases (scheduled runs
+  # and dispatches with bump_versions). Always runs so the downstream jobs can
+  # rely on its outputs: `sha` is the commit to build (the bump commit, or the
+  # triggering commit when nothing changed) and `bumped` the space-separated
+  # list of bumped harness ids.
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+      bumped: ${{ steps.bump.outputs.bumped }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # Deploy key (bypasses the "PR for main" ruleset); when the secret is
+          # unset checkout falls back to the workflow token, which can only
+          # read, and the bump step below fails with a clear message
+          ssh-key: ${{ secrets.BUMP_DEPLOY_KEY }}
+
+      - name: Bump version pin files
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAVE_DEPLOY_KEY: ${{ secrets.BUMP_DEPLOY_KEY != '' }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] && \
+             ! { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.bump_versions }}" = "true" ]; }; then
+            echo "No version bump requested (${{ github.event_name }})"
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "bumped=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ "$HAVE_DEPLOY_KEY" != "true" ]; then
+            echo "::error::Secret BUMP_DEPLOY_KEY is not set: the bump job cannot push to main. See docs/development.md (Release workflow) for the deploy-key setup."
+            exit 1
+          fi
+
+          # Latest upstream version of a harness: the npm dist-tag "latest", or
+          # the latest (non-prerelease) GitHub release
+          npm_latest()    { curl -fsSL "https://registry.npmjs.org/$1/latest" | jq -r '.version'; }
+          github_latest() { gh api "repos/$1/releases/latest" --jq '.tag_name' | sed 's/^v//'; }
+
+          BUMPED=""
+          SUMMARY=""
+          bump() {
+            local harness="$1" title="$2" version_file="$3" latest="$4"
+            local current
+            current=$(tr -d '[:space:]' < "$version_file")
+            if ! echo "$latest" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
+              echo "::warning::${title}: could not resolve the latest version ('${latest}'), keeping ${current}"
+              return
+            fi
+            # Only ever move forward (an unpublished upstream release must not
+            # downgrade the pin)
+            if [ "$latest" = "$current" ] || [ "$(printf '%s\n' "$current" "$latest" | sort -V | tail -1)" != "$latest" ]; then
+              echo "${title}: ${current} is current"
+              return
+            fi
+            echo "${title}: ${current} -> ${latest}"
+            echo "$latest" > "$version_file"
+            BUMPED="${BUMPED} ${harness}"
+            SUMMARY="${SUMMARY}"$'\n'"- ${title}: ${current} -> ${latest}"
+          }
+
+          bump claude   "Claude Code" CLAUDE_VERSION   "$(npm_latest @anthropic-ai/claude-code)"
+          bump opencode "OpenCode"    OPENCODE_VERSION "$(npm_latest opencode-ai)"
+          bump qwencode "Qwen Code"   QWENCODE_VERSION "$(npm_latest @qwen-code/qwen-code)"
+          bump codex    "Codex CLI"   CODEX_VERSION    "$(npm_latest @openai/codex)"
+          bump omp      "Oh My Pi"    OMP_VERSION      "$(github_latest can1357/oh-my-pi)"
+
+          BUMPED="${BUMPED# }"
+          if [ -z "$BUMPED" ]; then
+            echo "All version pins are current"
+            echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+            echo "bumped=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CLAUDE_VERSION OPENCODE_VERSION QWENCODE_VERSION CODEX_VERSION OMP_VERSION
+          # [skip ci]: this run builds the bump commit itself; the push must not
+          # start a second release run
+          git commit -q -m "chore: bump harness versions [skip ci]" -m "${SUMMARY#$'\n'}"
+          git push origin HEAD:main
+          echo "Pushed $(git rev-parse --short HEAD) to main (bumped: ${BUMPED})"
+
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "bumped=${BUMPED}" >> $GITHUB_OUTPUT
+
   detect:
+    needs: bump
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -63,10 +183,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.bump.outputs.sha }}
           fetch-depth: 0
 
       - name: Detect harnesses to release
         id: detect
+        env:
+          BUMPED: ${{ needs.bump.outputs.bumped }}
         run: |
           # Scheduled runs and manual "rebuild all" dispatches refresh everything
           REBUILD_ALL=false
@@ -108,9 +231,13 @@ jobs:
             fi
 
             local git_tag image_tag
-            # A version bump releases the plain version; any other relevant
-            # change releases a -N suffixed rebuild of the current version
-            if [ "$REBUILD_ALL" != "true" ] && git diff HEAD~1 HEAD -- "$version_file" | grep -q '^[+-][0-9]'; then
+            # A version bump (by the bump job or a pushed commit) releases the
+            # plain version; any other relevant change releases a -N suffixed
+            # rebuild of the current version
+            if echo " ${BUMPED} " | grep -q " ${harness} "; then
+              git_tag="${box}-v${version}"
+              image_tag="${version}"
+            elif [ "$REBUILD_ALL" != "true" ] && git diff HEAD~1 HEAD -- "$version_file" | grep -q '^[+-][0-9]'; then
               git_tag="${box}-v${version}"
               image_tag="${version}"
             elif [ "$SHARED_CHANGED" = "true" ] || echo "$CHANGED" | grep -qE "^(${launcher}|${overlay})$"; then
@@ -145,6 +272,7 @@ jobs:
           add_harness opencode ocbox OPENCODE_VERSION ocbox firewall-domains-opencode.txt
           add_harness qwencode qcbox QWENCODE_VERSION qcbox firewall-domains-qwencode.txt
           add_harness codex    cxbox CODEX_VERSION    cxbox firewall-domains-codex.txt
+          add_harness omp      ompbox OMP_VERSION     ompbox firewall-domains-omp.txt
 
           echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
           echo "force_base=${FORCE_BASE}" >> $GITHUB_OUTPUT
@@ -165,7 +293,7 @@ jobs:
 
   # One independent job per harness: build FROM the base tag, push, tag, release
   build:
-    needs: [detect, base]
+    needs: [bump, detect, base]
     if: needs.detect.outputs.any == 'true'
     permissions:
       contents: write
@@ -175,6 +303,7 @@ jobs:
         include: ${{ fromJSON(needs.detect.outputs.matrix) }}
     uses: ./.github/workflows/build-and-push.yml
     with:
+      ref: ${{ needs.bump.outputs.sha }}
       harness: ${{ matrix.harness }}
       image_tag: ${{ matrix.image_tag }}
       base_tag: ${{ needs.base.outputs.base_tag }}
