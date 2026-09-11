@@ -143,8 +143,8 @@ run_launcher() {  # uses the caller's name (scenario) and EXTRA_ENV
             TZ=UTC \
             NPM_PREFIX="$NPM_PREFIX" \
             RENDER_OUT="${OUT}/${name}.argv" \
-            ANTHROPIC_API_KEY=anthropic-stub \
-            OPENAI_API_KEY=openai-stub \
+            ANTHROPIC_API_KEY=anthropic-stub \ # notsecret
+            OPENAI_API_KEY=openai-stub \ # notsecret
             AWS_REGION=eu-west-1 \
             NO_COLOR=1 \
             "${EXTRA_ENV[@]}" \
