@@ -133,6 +133,10 @@ SCENARIOS=(
 # Fixed environment for every run. Provider keys exercise env passthrough.
 run_launcher() {  # uses the caller's name (scenario) and EXTRA_ENV
     local box="$1"; shift
+    local -a stub_keys=(
+        ANTHROPIC_API_KEY=anthropic-stub  # notsecret
+        OPENAI_API_KEY=openai-stub  # notsecret
+    )
     (
         cd "$WORKSPACE"
         env -i \
@@ -143,8 +147,7 @@ run_launcher() {  # uses the caller's name (scenario) and EXTRA_ENV
             TZ=UTC \
             NPM_PREFIX="$NPM_PREFIX" \
             RENDER_OUT="${OUT}/${name}.argv" \
-            ANTHROPIC_API_KEY=anthropic-stub \ # notsecret
-            OPENAI_API_KEY=openai-stub \ # notsecret
+            "${stub_keys[@]}" \
             AWS_REGION=eu-west-1 \
             NO_COLOR=1 \
             "${EXTRA_ENV[@]}" \
