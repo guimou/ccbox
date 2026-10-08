@@ -14,8 +14,8 @@
 # internal project key is identical for all projects; the per-project state dir is
 # therefore isolated per project on the host (~/.codex/cxbox-projects/). The
 # container's ~/.codex is a per-project dir. The shared config.toml is COPIED
-# into it at launch (seeded on first run, refreshed whenever the host file is
-# newer) rather than bind-mounted: Codex persists config edits (project trust,
+# into it at launch (seeded on first run, refreshed whenever the host file
+# changed since the last launch) rather than bind-mounted: Codex persists config edits (project trust,
 # /model, ...) by writing a temp file and renaming it over config.toml, and a
 # rename onto a single-file bind mount fails with EBUSY. Edits made inside the
 # container therefore stay per-project; the host file is the source of truth.
@@ -122,12 +122,20 @@ harness_setup_project() {
     # Empty credentials store (valid JSON) unless one already exists
     [[ -f "$project_auth" ]] || echo '{}' > "$project_auth"
 
+    # Refresh whenever the host file changed since the last sync, judged by
+    # content against a snapshot taken at that sync (kept outside the mounted
+    # data dir). Not by mtime: Codex rewrites the copy whenever it saves a
+    # setting, which makes it look newer than a host edit made earlier. A
+    # missing snapshot (first run, or a dir from an older cxbox) counts as
+    # changed, so the host file wins.
+    local synced_config="${PROJECT_DATA_DIR}/config.toml.synced"
     if [[ ! -f "$project_config" ]]; then
         cp "$shared_config" "$project_config"
-    elif [[ "$shared_config" -nt "$project_config" ]]; then
-        log_info "Shared config.toml is newer, refreshing the per-project copy (in-container edits are replaced)"
+    elif ! cmp -s "$shared_config" "$synced_config" && ! cmp -s "$shared_config" "$project_config"; then
+        log_info "Shared config.toml changed, refreshing the per-project copy (in-container edits are replaced)"
         cp "$shared_config" "$project_config"
     fi
+    cp "$shared_config" "$synced_config"
     # Codex must be able to read and rewrite it whatever the host file's mode
     chmod u+rw "$project_config"
 }
