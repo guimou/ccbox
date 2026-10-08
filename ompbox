@@ -32,7 +32,7 @@
 #   3. omp persists config.yml edits by writing a temp file and renaming it
 #      over config.yml; a rename onto a single-file bind mount fails with
 #      EBUSY. So config.yml is COPIED into the per-project dir at launch
-#      (seeded on first run, refreshed whenever the host file is newer),
+#      (seeded on first run, refreshed whenever the host file changed),
 #      exactly like cxbox does for config.toml. Edits made inside the
 #      container therefore stay per-project; the host file is the source of
 #      truth. The other shareable config dirs/files above have no such
@@ -151,12 +151,20 @@ harness_setup_project() {
         fi
     done
 
+    # Refresh whenever the host file changed since the last sync, judged by
+    # content against a snapshot taken at that sync (kept outside the mounted
+    # agent dir). Not by mtime: omp rewrites the copy whenever it saves a
+    # setting, which makes it look newer than a host edit made earlier. A
+    # missing snapshot (first run, or a dir from an older ompbox) counts as
+    # changed, so the host file wins.
+    local synced_config="${PROJECT_DATA_DIR}/config.yml.synced"
     if [[ ! -f "$project_config" ]]; then
         cp "$shared_config" "$project_config"
-    elif [[ "$shared_config" -nt "$project_config" ]]; then
-        log_info "Shared config.yml is newer, refreshing the per-project copy (in-container edits are replaced)"
+    elif ! cmp -s "$shared_config" "$synced_config" && ! cmp -s "$shared_config" "$project_config"; then
+        log_info "Shared config.yml changed, refreshing the per-project copy (in-container edits are replaced)"
         cp "$shared_config" "$project_config"
     fi
+    cp "$shared_config" "$synced_config"
     # omp must be able to read and rewrite it whatever the host file's mode
     chmod u+rw "$project_config"
 
