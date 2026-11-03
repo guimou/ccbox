@@ -46,6 +46,7 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--list-sessions` | List active sessions for the current project |
 | `--runtime <name>` | Container runtime: `podman` (default when installed) or `apptainer` (see [Runtimes](#runtimes)) |
 | `--pull` | Apptainer only: convert the image to a SIF again even if one exists for this version |
+| `--no-memory-limit` | Run this session outside the shared memory budget (see [Memory Budget](#memory-budget)) |
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
@@ -75,6 +76,44 @@ Apptainer environment variables:
 | `CODEBOX_SIF_DIR` | `$CODEBOX_STATE_DIR/sifs` | SIF store; can be shared by several pods |
 | `CODEBOX_SCRATCH_DIR` | unset | When set, a per-session directory under it is bound at `/tmp` inside the container, so large temporary writes go to disk instead of the RAM-backed writable overlay. Point it at a node-local volume. |
 | `APPTAINER_TMPDIR` / `APPTAINER_CACHEDIR` | Apptainer defaults | Where the image-to-SIF conversion unpacks layers. Must be node-local disk, not a network filesystem. |
+
+## Memory Budget
+
+Coding agents (and the builds, test runs and browsers they start) can use a lot of memory, and several sessions at once can exhaust the host until the desktop freezes. With the Podman runtime on Linux, every session of every launcher (ccbox, ocbox, qcbox, cxbox, ompbox) therefore runs inside one systemd user slice, `codebox.slice`, that holds a **single memory budget shared by all of them**. When the agents together reach it, the kernel first slows them down (`MemoryHigh`), then OOM-kills a process inside the slice (`MemoryMax`). Your desktop, browser and system services stay outside the slice and keep running.
+
+It is on by default. The defaults are percentages of physical RAM, so the same defaults fit any machine:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CODEBOX_MEMORY_MAX` | `80%` | Hard limit for all sessions together. `off` disables the budget. |
+| `CODEBOX_MEMORY_HIGH` | 90% of the max | Throttling threshold: above it, the agents are slowed down and their memory reclaimed aggressively |
+| `CODEBOX_MEMORY_SWAP_MAX` | `2G` | Swap the sessions may use together (`0` for none). Kept small on purpose: an agent swapping heavily (zram included) is what makes a host thrash. |
+| `CODEBOX_SLICE` | `codebox.slice` | Slice name |
+
+Sizes use systemd syntax: a number with an optional `K`/`M`/`G`/`T` suffix, a percentage of RAM (not for the swap limit), or `infinity`.
+
+Set them per machine, for example in `~/.bashrc`:
+
+```bash
+# 32 GB laptop: keep ~8 GB for the desktop
+export CODEBOX_MEMORY_MAX=24G
+
+# 64 GB workstation
+export CODEBOX_MEMORY_MAX=52G
+export CODEBOX_MEMORY_SWAP_MAX=4G
+```
+
+How it works:
+
+- The launcher writes `~/.config/systemd/user/codebox.slice` from these variables and reloads the user manager when the content changed (and updates a running slice live), then starts the container with `--cgroup-parent=codebox.slice`. Configure it through the variables, not by editing the file: the next launch would rewrite it.
+- The slice is shared, so the values from the most recent launch apply to all running sessions. Keep the variables in your shell profile so every launch agrees.
+- A single session can still use the whole budget. If one agent hits it, the kernel kills a process inside the slice (often the agent's biggest child: a build, a test run, a browser), not your desktop.
+- `ccbox --no-memory-limit` (or `CODEBOX_MEMORY_MAX=off`) runs a session outside the budget.
+- Requirements, checked at launch: Linux with cgroup v2, a systemd user session with the memory controller delegated to it, and Podman using the `systemd` cgroup manager (all defaults on Fedora). If one is missing, the launcher warns and starts without a budget. macOS (Podman machine) and the Apptainer runtime are not covered; in a pod, the pod's own memory limit plays this role.
+
+Check usage with `systemctl --user status codebox.slice` or `systemd-cgtop -m user.slice`. Both count the page cache of files the agents touched, most of which the kernel reclaims first under pressure, so they read higher than what the agents really hold.
+
+If you run agents from the [Herdr app](https://herdr.dev), the [agent memory mod](../integrations/herdr-app-agent-memory/README.md) adds a panel listing each agent's working set against the budget, and a toast before the agents reach it.
 
 ## Extra Mounts
 
@@ -324,6 +363,9 @@ ccbox --safe-mode
 
 # Print the full podman (or apptainer) command before execution
 DEBUG=1 ccbox
+
+# Memory used by all agent sessions, against the shared budget
+systemctl --user status codebox.slice
 ```
 
 ## Playwright MCP Plugin (ccbox)

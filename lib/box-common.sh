@@ -316,6 +316,7 @@ show_help() {
     echo "  --install                Show installation instructions"
     echo "  --runtime NAME           Container runtime: podman (default when installed) or apptainer"
     echo "  --pull                   apptainer: re-pull the SIF even if one exists for this version"
+    echo "  --no-memory-limit        Run this session outside the shared memory budget (podman)"
     harness_extra_help
     echo "  -h, --help               Show this help message"
     echo ""
@@ -329,6 +330,11 @@ show_help() {
     echo "  ${BOX_NAME} --no-github                  # Run without GitHub token"
     echo "  ${BOX_NAME} -- --version                 # Pass args to ${HARNESS_CLI}"
     echo "  ${BOX_NAME} --shell                      # Open a shell in the container instead of ${HARNESS_CLI}"
+    echo ""
+    echo "Shared memory budget (podman on Linux; one budget for all ccbox/ocbox/qcbox/cxbox/ompbox sessions):"
+    echo "  CODEBOX_MEMORY_MAX       Hard limit for all sessions together (default 80% of RAM; 'off' disables)"
+    echo "  CODEBOX_MEMORY_HIGH      Throttling threshold (default 90% of the max)"
+    echo "  CODEBOX_MEMORY_SWAP_MAX  Swap the sessions may use (default 2G)"
 }
 
 # Read version from the harness version file if not specified via command line
@@ -511,6 +517,142 @@ podman_rt_resolve_image() {
     fi
 }
 
+# --- Shared memory budget (podman on Linux) ---------------------------------
+# Every podman session of every launcher (ccbox, ocbox, qcbox, cxbox, ompbox)
+# joins one systemd user slice, so all agents together share a single memory
+# budget: when they reach it, the kernel throttles and then OOM-kills inside
+# the slice, and the rest of the desktop keeps running. The slice unit is
+# generated from these variables (percentages are of physical RAM, so the
+# defaults fit any machine; set absolute sizes per machine to override):
+#   CODEBOX_MEMORY_MAX       hard limit of the slice (default 80%), or "off"
+#                            to run sessions without a budget
+#   CODEBOX_MEMORY_HIGH      throttling threshold (default 90% of the max)
+#   CODEBOX_MEMORY_SWAP_MAX  swap the slice may use (default 2G)
+#   CODEBOX_SLICE            slice name (default codebox.slice)
+# Sizes take systemd syntax: a number with an optional K/M/G/T suffix, a
+# percentage, or "infinity". CODEBOX_CGROUP_ROOT (default /sys/fs/cgroup)
+# exists for the tests.
+
+MEMORY_BUDGET_STATUS=""
+
+# Validate a size value ($2) for the variable named $1; empty is allowed.
+check_memory_size() {
+    local name="$1" value="$2" allow_percent="${3:-true}"
+    [[ -z "$value" ]] && return 0
+    if [[ "$value" =~ ^[0-9]+[KMGT]?$ || "$value" == infinity ]]; then
+        return 0
+    fi
+    if $allow_percent && [[ "$value" =~ ^[0-9]{1,3}%$ ]] && (( 10#${value%\%} <= 100 )); then
+        return 0
+    fi
+    log_error "${name}: invalid size '${value}' (expected e.g. 24G, 75%, or infinity)"
+    exit 1
+}
+
+# Default throttling threshold: 90% of the hard limit, in the same unit.
+default_memory_high() {
+    local max="$1" num suffix
+    case "$max" in
+        infinity) echo "" ;;
+        *%)       echo "$(( 10#${max%\%} * 9 / 10 ))%" ;;
+        *)
+            num="${max%[KMGT]}"
+            suffix="${max#"$num"}"
+            num=$(( 10#$num ))
+            case "$suffix" in
+                K) num=$(( num * 1024 )) ;;
+                M) num=$(( num * 1024 * 1024 )) ;;
+                G) num=$(( num * 1024 * 1024 * 1024 )) ;;
+                T) num=$(( num * 1024 * 1024 * 1024 * 1024 )) ;;
+            esac
+            num=$(( num * 9 / 10 / 1024 / 1024 ))
+            (( num > 0 )) && echo "${num}M" || echo ""
+            ;;
+    esac
+}
+
+# Why the budget cannot be applied on this host (empty when it can).
+memory_budget_unavailable() {
+    local cg_root="${CODEBOX_CGROUP_ROOT:-/sys/fs/cgroup}" uid
+    uid="$(id -u)"
+    if [[ "$OS_TYPE" != "linux" ]]; then
+        echo "not supported on ${OS_TYPE}"
+    elif [[ ! -f "${cg_root}/cgroup.controllers" ]]; then
+        echo "needs cgroup v2"
+    elif ! grep -qw memory "${cg_root}/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers" 2>/dev/null; then
+        echo "the memory controller is not delegated to your user session"
+    elif ! command -v systemctl &>/dev/null || ! systemctl --user show-environment &>/dev/null; then
+        echo "no systemd user session"
+    elif [[ "$(podman info --format '{{.Host.CgroupManager}}' 2>/dev/null)" != systemd ]]; then
+        echo "podman does not use the systemd cgroup manager"
+    fi
+}
+
+# Write the slice unit if its content changed and apply it, then point
+# podman at it. Sets MEMORY_BUDGET_SLICE (empty when no budget applies) and
+# MEMORY_BUDGET_STATUS for the launch summary.
+setup_memory_budget() {
+    MEMORY_BUDGET_SLICE=""
+    local slice="${CODEBOX_SLICE:-codebox.slice}"
+    local max="${CODEBOX_MEMORY_MAX:-80%}"
+    local high="${CODEBOX_MEMORY_HIGH:-}"
+    local swap="${CODEBOX_MEMORY_SWAP_MAX:-2G}"
+
+    if $NO_MEMORY_LIMIT || [[ "$max" == off ]]; then
+        MEMORY_BUDGET_STATUS="Memory budget: disabled"
+        return 0
+    fi
+    if [[ ! "$slice" =~ ^[A-Za-z0-9_-]+\.slice$ ]]; then
+        log_error "CODEBOX_SLICE: invalid slice name '${slice}' (expected NAME.slice)"
+        exit 1
+    fi
+    check_memory_size CODEBOX_MEMORY_MAX "$max"
+    check_memory_size CODEBOX_MEMORY_HIGH "$high"
+    check_memory_size CODEBOX_MEMORY_SWAP_MAX "$swap" false
+    [[ -z "$high" ]] && high="$(default_memory_high "$max")"
+
+    local reason
+    reason="$(memory_budget_unavailable)"
+    if [[ -n "$reason" ]]; then
+        log_warn "Shared memory budget not applied: ${reason}"
+        MEMORY_BUDGET_STATUS="Memory budget: not applied (${reason})"
+        return 0
+    fi
+
+    local unit_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+    local unit_file="${unit_dir}/${slice}"
+    local -a props=(MemoryAccounting=yes)
+    [[ -n "$high" ]] && props+=("MemoryHigh=${high}")
+    props+=("MemoryMax=${max}" "MemorySwapMax=${swap}")
+    local content
+    content="$(
+        echo "# Generated by the codebox launchers (ccbox, ocbox, qcbox, cxbox, ompbox)."
+        echo "# Shared memory budget for all agent containers. Do not edit: set"
+        echo "# CODEBOX_MEMORY_MAX / CODEBOX_MEMORY_HIGH / CODEBOX_MEMORY_SWAP_MAX instead;"
+        echo "# the next launch rewrites this file when they change."
+        echo "[Unit]"
+        echo "Description=Shared memory budget for codebox agent containers"
+        echo ""
+        echo "[Slice]"
+        printf '%s\n' "${props[@]}"
+    )"
+
+    if [[ "$(cat "$unit_file" 2>/dev/null)" != "$content" ]]; then
+        mkdir -p "$unit_dir"
+        printf '%s\n' "$content" > "$unit_file"
+        systemctl --user daemon-reload
+        # A running slice keeps its old limits until told otherwise
+        if systemctl --user is-active --quiet "$slice"; then
+            local -a live=("${props[@]}")
+            [[ -z "${high}" ]] && live+=("MemoryHigh=infinity")
+            systemctl --user set-property --runtime "$slice" "${live[@]}"
+        fi
+    fi
+
+    MEMORY_BUDGET_SLICE="$slice"
+    MEMORY_BUDGET_STATUS="Memory budget: ${slice} (max ${max}${high:+, high ${high}}, swap ${swap}; shared by all sessions)"
+}
+
 # Render BOX_SPEC + launch command into RUN_ARGS for `podman run`
 podman_rt_render() {
     # shellcheck disable=SC2054  # commas are part of the --userns option value
@@ -521,7 +663,16 @@ podman_rt_render() {
         --hostname "$BOX_NAME"
         --userns=keep-id:uid=1000,gid=1000
         -w /workspace
+        # Interactive TUI session: keep its output out of the journal
+        # (podman's default journald driver would record every redraw,
+        # and anything shown on screen, tokens included)
+        --log-driver=none
     )
+
+    setup_memory_budget
+    if [[ -n "$MEMORY_BUDGET_SLICE" ]]; then
+        RUN_ARGS+=("--cgroup-parent=${MEMORY_BUDGET_SLICE}")
+    fi
 
     local entry kind a b c
     for entry in "${BOX_SPEC[@]}"; do
@@ -860,6 +1011,7 @@ box_main() {
     NPM_GLOBAL=""
     RUNTIME_OPT=""
     FORCE_PULL=false
+    NO_MEMORY_LIMIT=false
     EXTRA_ARGS=()
 
     while [[ $# -gt 0 ]]; do
@@ -965,6 +1117,10 @@ box_main() {
             --pull)
                 # shellcheck disable=SC2034  # read by the apptainer backend
                 FORCE_PULL=true
+                shift
+                ;;
+            --no-memory-limit)
+                NO_MEMORY_LIMIT=true
                 shift
                 ;;
             --)
@@ -1141,6 +1297,7 @@ box_main() {
     log_info "Session: $SESSION_ID"
     log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
     log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
+    [[ -n "$MEMORY_BUDGET_STATUS" ]] && log_info "$MEMORY_BUDGET_STATUS"
     harness_log_status
     if $NO_GITHUB; then
         log_info "GitHub: disabled"
