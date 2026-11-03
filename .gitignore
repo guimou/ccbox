@@ -14,3 +14,6 @@ opencode.json
 
 # Kubernetes overlay secrets (see k8s/overlays/example/codebox.env.example)
 k8s/overlays/*/codebox.env
+
+# Python bytecode
+__pycache__/

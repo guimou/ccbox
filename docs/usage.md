@@ -111,7 +111,9 @@ How it works:
 - `ccbox --no-memory-limit` (or `CODEBOX_MEMORY_MAX=off`) runs a session outside the budget.
 - Requirements, checked at launch: Linux with cgroup v2, a systemd user session with the memory controller delegated to it, and Podman using the `systemd` cgroup manager (all defaults on Fedora). If one is missing, the launcher warns and starts without a budget. macOS (Podman machine) and the Apptainer runtime are not covered; in a pod, the pod's own memory limit plays this role.
 
-Check usage with `systemctl --user status codebox.slice` or `systemd-cgtop -m user.slice`.
+Check usage with `systemctl --user status codebox.slice` or `systemd-cgtop -m user.slice`. Both count the page cache of files the agents touched, most of which the kernel reclaims first under pressure, so they read higher than what the agents really hold.
+
+If you run agents from the [Herdr app](https://herdr.dev), the [agent memory mod](../integrations/herdr-app-agent-memory/README.md) adds a panel listing each agent's working set against the budget, and a toast before the agents reach it.
 
 ## Extra Mounts
 
