@@ -2,6 +2,7 @@
 --cap-add=NET_RAW
 --cgroup-parent=codebox.slice
 --hostname cxbox
+--log-driver=none
 --name cxbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000

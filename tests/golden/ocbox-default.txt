@@ -1,5 +1,6 @@
 --cgroup-parent=codebox.slice
 --hostname ocbox
+--log-driver=none
 --name ocbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000

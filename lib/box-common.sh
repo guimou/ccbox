@@ -663,6 +663,10 @@ podman_rt_render() {
         --hostname "$BOX_NAME"
         --userns=keep-id:uid=1000,gid=1000
         -w /workspace
+        # Interactive TUI session: keep its output out of the journal
+        # (podman's default journald driver would record every redraw,
+        # and anything shown on screen, tokens included)
+        --log-driver=none
     )
 
     setup_memory_budget

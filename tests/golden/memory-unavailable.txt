@@ -1,4 +1,5 @@
 --hostname qcbox
+--log-driver=none
 --name qcbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000

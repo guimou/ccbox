@@ -2,6 +2,7 @@
 --cap-add=NET_RAW
 --cgroup-parent=codebox.slice
 --hostname ccbox
+--log-driver=none
 --name ccbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000

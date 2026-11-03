@@ -1,5 +1,6 @@
 --cgroup-parent=codebox.slice
 --hostname ompbox
+--log-driver=none
 --name ompbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000
