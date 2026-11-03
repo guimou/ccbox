@@ -97,6 +97,8 @@ ccbox --settings redhat   # Use ~/.claude/settings-redhat.json as settings.json
 ccbox --help              # All options
 ```
 
+All agent sessions share one memory budget (80% of RAM by default; set `CODEBOX_MEMORY_MAX=24G` per machine), so a runaway agent gets OOM-killed instead of freezing your desktop. See [Memory Budget](docs/usage.md#memory-budget).
+
 API keys and provider settings are forwarded from host environment variables (e.g. `ANTHROPIC_API_KEY`, Vertex AI, Bedrock) — see the [usage guide](docs/usage.md#api-provider-configuration) for exactly what is passed per launcher.
 
 > **Breaking change:** host credential *store* files are no longer mounted by default. Pass:

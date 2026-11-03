@@ -19,6 +19,8 @@
 #     does not care about their order); the tail (image + command) is kept
 #     verbatim, in order. For apptainer, the APPTAINERENV_* exports are
 #     listed as `--env NAME=VALUE` pairs.
+#   - when a scenario generates the shared memory budget slice unit, its
+#     content and the systemctl calls made are appended after the command
 # A scenario name starting with "!" is expected to fail before launching.
 
 set -euo pipefail
@@ -45,6 +47,15 @@ touch "${FAKE_HOME}/.claude/status-line.sh" "${FAKE_HOME}/.claude/RULES.md" "${F
 echo '{}' > "${FAKE_HOME}/.claude/settings-redhat.json"
 mkdir -p "${FAKE_HOME}/.omp/agent" && touch "${FAKE_HOME}/.omp/agent/AGENTS.md"
 
+# cgroup v2 tree with the memory controller delegated to the user session,
+# so the shared memory budget applies (CODEBOX_CGROUP_ROOT points here)
+CGROUP_ROOT="${ROOT}/cgroup"
+USER_CG="${CGROUP_ROOT}/user.slice/user-$(id -u).slice/user@$(id -u).service"
+mkdir -p "$USER_CG"
+echo "cpuset cpu io memory hugetlb pids misc" > "${CGROUP_ROOT}/cgroup.controllers"
+echo "cpu memory pids" > "${USER_CG}/cgroup.controllers"
+SLICE_DIR="${FAKE_HOME}/.config/systemd/user"
+
 # --- stubs ---------------------------------------------------------------
 
 cat > "${STUBS}/podman" <<'EOF'
@@ -53,6 +64,7 @@ case "$1" in
     pull)    exit 0 ;;
     image)   [[ "$3" == codebox-base:* ]] && exit 1; exit 0 ;;   # local harness image exists, no local base
     ps)      exit 0 ;;
+    info)    echo "${STUB_CGROUP_MANAGER:-systemd}"; exit 0 ;;
     unshare) shift; exec "$@" ;;
     run)     shift; printf '%s\n' "$@" > "${RENDER_OUT}"; exit 0 ;;
     *)       echo "stub podman: unexpected '$1'" >&2; exit 99 ;;
@@ -68,6 +80,17 @@ case "$1" in
                printf '%s\n' "$@"; } > "${RENDER_OUT}"
              exit 0 ;;
     *)       echo "stub apptainer: unexpected '$1'" >&2; exit 99 ;;
+esac
+EOF
+
+cat > "${STUBS}/systemctl" <<'EOF'
+#!/bin/bash
+[[ "$1" == --user ]] && shift
+case "$1" in
+    show-environment) exit 0 ;;
+    is-active)        exit "${STUB_SLICE_ACTIVE:-3}" ;;
+    daemon-reload|set-property) echo "systemctl --user $*" >> "${SYSTEMCTL_LOG}"; exit 0 ;;
+    *) echo "stub systemctl: unexpected '$1'" >&2; exit 99 ;;
 esac
 EOF
 
@@ -137,6 +160,16 @@ SCENARIOS=(
     "!apptainer-firewall|ccbox|--runtime apptainer --with-firewall"
     "!apptainer-build|ccbox|--runtime apptainer --build"
     "!unknown-runtime|ccbox|--runtime docker"
+    # shared memory budget (podman): defaults are covered by every podman
+    # scenario above; these set the CODEBOX_MEMORY_* variables (see below)
+    "memory-absolute-live|ccbox|"
+    "memory-percent|ompbox|"
+    "memory-env-off|cxbox|"
+    "memory-flag-off|ccbox|--no-memory-limit"
+    "memory-unavailable|qcbox|"
+    "!memory-invalid-max|ccbox|"
+    "!memory-invalid-swap|ccbox|"
+    "!memory-invalid-slice|ccbox|"
 )
 
 # Fixed environment for every run. Provider keys exercise env passthrough.
@@ -159,6 +192,8 @@ run_launcher() {  # uses the caller's name (scenario) and EXTRA_ENV
             "${stub_keys[@]}" \
             AWS_REGION=eu-west-1 \
             NO_COLOR=1 \
+            CODEBOX_CGROUP_ROOT="$CGROUP_ROOT" \
+            SYSTEMCTL_LOG="${OUT}/${name}.systemctl" \
             "${EXTRA_ENV[@]}" \
             "${BIN}/${box}" "$@" > "${OUT}/${name}.log" 2>&1
     )
@@ -206,6 +241,16 @@ for entry in "${SCENARIOS[@]}"; do
     elif [[ "$name" == ccbox-settings-env ]]; then
         EXTRA_ENV=(CCBOX_SETTINGS=redhat)
     fi
+    case "${name#!}" in
+        memory-absolute-live) EXTRA_ENV=(CODEBOX_MEMORY_MAX=48G CODEBOX_MEMORY_SWAP_MAX=0 STUB_SLICE_ACTIVE=0) ;;
+        memory-percent)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=60% CODEBOX_MEMORY_HIGH=50% CODEBOX_SLICE=agents.slice) ;;
+        memory-env-off)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=off) ;;
+        memory-unavailable)   EXTRA_ENV=(STUB_CGROUP_MANAGER=cgroupfs) ;;
+        memory-invalid-max)   EXTRA_ENV=(CODEBOX_MEMORY_MAX=lots) ;;
+        memory-invalid-swap)  EXTRA_ENV=(CODEBOX_MEMORY_SWAP_MAX=50%) ;;
+        memory-invalid-slice) EXTRA_ENV=(CODEBOX_SLICE=../evil) ;;
+    esac
+    rm -rf "$SLICE_DIR"
     if [[ "$name" == !* ]]; then
         # Expected to be refused before anything is launched
         name="${name#!}"
@@ -229,6 +274,13 @@ for entry in "${SCENARIOS[@]}"; do
         continue
     }
     scrub < "${OUT}/${name}.argv" | normalize > "${OUT}/${name}.txt"
+    for unit in "$SLICE_DIR"/*.slice; do
+        [[ -f "$unit" ]] || continue
+        { echo "## ${unit#"${FAKE_HOME}/"}"; cat "$unit"; } >> "${OUT}/${name}.txt"
+    done
+    if [[ -f "${OUT}/${name}.systemctl" ]]; then
+        { echo "## systemctl calls"; cat "${OUT}/${name}.systemctl"; } >> "${OUT}/${name}.txt"
+    fi
     if [[ "$MODE" == record ]]; then
         cp "${OUT}/${name}.txt" "${GOLDEN_DIR}/${name}.txt"
         echo "recorded ${name}"
