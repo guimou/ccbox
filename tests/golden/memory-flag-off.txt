@@ -1,4 +1,5 @@
 --hostname ccbox
+--init
 --log-driver=none
 --name ccbox-demo-HASH-SESSION
 --rm

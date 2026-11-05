@@ -59,6 +59,7 @@ The wrappers locate the engine relative to their (symlink-resolved) location, su
 - **Base**: `quay.io/guimou/codebox-base` (built from `quay.io/fedora/fedora:44`)
 - **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
 - **SELinux**: `:z` volume labels for shared relabeling (multi-session safe); omitted on macOS (virtiofs)
+- **PID 1**: `--init` runs catatonit as PID 1 to reap orphaned processes; the harness does not reap them, so as PID 1 it would leave zombies holding slots of the container's pids limit until the container stops
 - **Logging**: `--log-driver=none`, so the interactive session's terminal output (and anything shown in it) is not copied into the journal; `podman logs` is therefore empty for these containers
 - **Container name**: `{box}-{project}-{hash}-{session-id}` — multiple sessions can run simultaneously in the same project, sharing project data
 - **Firewall**: optional (`--with-firewall`), iptables/ipset allowlist, requires `NET_ADMIN`/`NET_RAW` (added automatically), Linux only

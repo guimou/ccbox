@@ -2,6 +2,7 @@
 --cap-add=NET_RAW
 --cgroup-parent=codebox.slice
 --hostname ompbox
+--init
 --log-driver=none
 --name ompbox-demo-HASH-SESSION
 --rm

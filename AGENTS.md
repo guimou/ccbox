@@ -263,6 +263,7 @@ The launchers also run inside a long-lived pod (`docs/kubernetes.md`): the pod i
 - **Registries**: `quay.io/guimou/ccbox`, `quay.io/guimou/ocbox`, `quay.io/guimou/qcbox`, `quay.io/guimou/cxbox`, `quay.io/guimou/ompbox` (CI/CD published), built on `quay.io/guimou/codebox-base`
 - **Base**: `quay.io/guimou/codebox-base` (built from `quay.io/fedora/fedora:44`)
 - **User**: `coder` (UID 1000) for `--userns=keep-id` compatibility
+- **PID 1**: `--init` runs catatonit as PID 1 to reap orphaned processes (Podman backend; Apptainer's `--pid` starts its own shim init)
 - **Mounts**:
   - Current directory → `/workspace`
   - Global settings (shared; `--settings <name>` swaps in `~/.claude/settings-<name>.json` as `settings.json`): `~/.claude/{settings.json,settings.local.json,keybindings.json,CLAUDE.md,statsig,hooks,commands,skills,agents,rules}`

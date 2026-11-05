@@ -1,5 +1,6 @@
 --cgroup-parent=agents.slice
 --hostname ompbox
+--init
 --log-driver=none
 --name ompbox-demo-HASH-SESSION
 --rm

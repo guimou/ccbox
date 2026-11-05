@@ -1,5 +1,6 @@
 --cgroup-parent=codebox.slice
 --hostname cxbox
+--init
 --log-driver=none
 --name cxbox-demo-HASH-SESSION
 --rm

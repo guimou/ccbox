@@ -667,6 +667,12 @@ podman_rt_render() {
         # (podman's default journald driver would record every redraw,
         # and anything shown on screen, tokens included)
         --log-driver=none
+        # Run an init (catatonit) as PID 1 to reap orphans. The harness would
+        # otherwise be PID 1 and never reap them: each one stays a zombie and
+        # holds a slot of the pids limit (2048 by default) until the container
+        # stops, and at the limit every fork fails. Apptainer's --pid already
+        # starts a shim init, so its backend needs nothing equivalent.
+        --init
     )
 
     setup_memory_budget
