@@ -208,7 +208,7 @@ normalize() {
         local t="${tokens[$i]}"
         if [[ "$t" == -* ]]; then
             case "$t" in
-                --rm|-it|-i|-t|*=*) pairs+=("$t"); i=$((i+1)) ;;
+                --rm|--init|-it|-i|-t|*=*) pairs+=("$t"); i=$((i+1)) ;;
                 --userns|--no-home|--pid|--ipc|--cleanenv|--writable-tmpfs) pairs+=("$t"); i=$((i+1)) ;;
                 *) pairs+=("$t ${tokens[$((i+1))]}"); i=$((i+2)) ;;
             esac

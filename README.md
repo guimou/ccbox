@@ -30,7 +30,7 @@ All five provide:
 
 ### Prerequisites
 
-- [Podman](https://podman.io/docs/installation) installed and configured for rootless operation
+- [Podman](https://podman.io/docs/installation) installed and configured for rootless operation, with `catatonit` available (the container init behind `podman run --init`; on Fedora, `sudo dnf install catatonit` if it is missing)
 - Fedora Linux (or compatible distribution) or macOS with [Podman Desktop](https://podman-desktop.io/downloads)
 
 ### Option 1: Download the scripts (simplest)

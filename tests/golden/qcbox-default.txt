@@ -1,5 +1,6 @@
 --cgroup-parent=codebox.slice
 --hostname qcbox
+--init
 --log-driver=none
 --name qcbox-demo-HASH-SESSION
 --rm
