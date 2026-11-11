@@ -194,6 +194,7 @@ Codex stores all state under `~/.codex` (`CODEX_HOME` is intentionally not forwa
 | `~/.omp/agent/{SYSTEM.md,APPEND_SYSTEM.md,RULES.md,TITLE_SYSTEM.md,AGENTS.md,models.yml,mcp.json,keybindings.json}` | Shareable config files, when present on the host | Shared (ro, bind-mounted) |
 | `~/.omp/.env`, `~/.omp/agent/.env` | Dotenv API keys (opt-in, `--with-credentials`) | Shared (ro, not mounted by default) |
 | `~/.omp/ompbox-projects/{name}_{hash}/agent/` | `agent.db` (+ `-wal`/`-shm`), sessions, blobs, terminal sessions, history, and the `config.yml` copy (mounted as the container `~/.omp/agent`) | Per-project |
+| `~/.omp/profiles/<name>/{config.yml,.env,models.yml}` | Account profiles (`ompbox --profile <name>`): config replaces the per-project config copy source (per-profile sync snapshot), `.env`/`models.yml` replace the corresponding shared mounts for that run | Shared (host files, per-launch selection) |
 
 Oh My Pi keeps three kinds of state, each with a different constraint on how it can be mounted:
 
@@ -201,8 +202,9 @@ Oh My Pi keeps three kinds of state, each with a different constraint on how it 
 - **`config.yml`** is saved by omp via write-temp-then-rename, the same pattern Codex uses for `config.toml`, so it cannot be a single-file bind mount (rename over a bind-mounted file fails with `EBUSY`). It is copied into the per-project dir at launch instead — seeded on first run, refreshed whenever the host file changed since the last launch — exactly like cxbox's `config.toml`.
 - **Shared config directories and files** under `~/.omp/agent/` (commands, rules, prompts, instructions, skills, hooks, tools, extensions, plus the user-authored prompt/config files above) are ordinary files or directories that omp does not rewrite in place, so they are bind-mounted directly from the host: the directories read-write, the files read-only, and only when they exist on the host.
 
-`--with-credentials` mounts the two dotenv files read-only; it does not and cannot share `agent.db`, so `/login` (browser OAuth, or headless by pasting the callback URL) always stays local to the project it was run in.
+- **Account profiles** (`--profile <name>`, see [usage.md](usage.md#account-profiles-ompbox)) are a host-side config/credentials overlay, not state: the profile's `config.yml` becomes the source for the per-project copy (each source tracks its own sync snapshot, so switching profiles replaces the in-container copy on the next launch with that profile), its `.env` and `models.yml`, when present, replace the shared `agent/.env` and `models.yml` mounts for that run. `agent.db`, sessions, and memories stay per-project regardless of profile.
 
+`--with-credentials` mounts the two dotenv files read-only; it does not and cannot share `agent.db`, so `/login` (browser OAuth, or headless by pasting the callback URL) always stays local to the project it was run in.
 ## Firewall
 
 When launched with `--with-firewall` (Linux only), outbound connections are restricted to an allowlist baked into each image at build time from two files:
