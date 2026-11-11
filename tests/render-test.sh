@@ -46,6 +46,11 @@ mkdir -p "${FAKE_HOME}/.config/gcloud" "${FAKE_HOME}/.claude" "${FAKE_HOME}/.qwe
 touch "${FAKE_HOME}/.claude/status-line.sh" "${FAKE_HOME}/.claude/RULES.md" "${FAKE_HOME}/.qwen/.env"
 echo '{}' > "${FAKE_HOME}/.claude/settings-redhat.json"
 mkdir -p "${FAKE_HOME}/.omp/agent" && touch "${FAKE_HOME}/.omp/agent/AGENTS.md"
+mkdir -p "${FAKE_HOME}/.omp/profiles/red" "${FAKE_HOME}/.omp/profiles/redfree"
+printf 'startup:\n  checkUpdate: false\n' > "${FAKE_HOME}/.omp/profiles/red/config.yml"
+printf 'provider_env: RED_ACCOUNT\n' > "${FAKE_HOME}/.omp/profiles/red/.env"
+printf 'startup:\n  checkUpdate: false\n' > "${FAKE_HOME}/.omp/profiles/redfree/config.yml"
+echo '{}' > "${FAKE_HOME}/.omp/profiles/redfree/models.yml"
 
 # cgroup v2 tree with the memory controller delegated to the user session,
 # so the shared memory budget applies (CODEBOX_CGROUP_ROOT points here)
@@ -147,6 +152,11 @@ SCENARIOS=(
     "ompbox-default|ompbox|"
     "ompbox-all-opts|ompbox|--with-firewall --with-credentials --with-gcloud --with-gitconfig"
     "ompbox-args|ompbox|-- --version"
+    # ompbox account profiles (fixtures under ~/.omp/profiles/ above)
+    "ompbox-profile|ompbox|--profile red"
+    "ompbox-profile-env|ompbox|--profile=redfree --with-credentials"
+    "!ompbox-profile-missing|ompbox|--profile nope"
+    "!ompbox-profile-invalid|ompbox|--profile ../evil"
     # apptainer runtime (the pod-as-host case): no clipboard/npm-global, SIF image
     "apptainer-ccbox-default|ccbox|--runtime apptainer"
     "apptainer-ccbox-all-opts|ccbox|--runtime apptainer --with-credentials --with-gcloud --with-gitconfig --with-teams --with-tmux"

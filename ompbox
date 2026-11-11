@@ -19,6 +19,12 @@
 #   models.yml, mcp.json, keybindings.json
 #                                      shareable, user-authored config files
 #   ~/.omp/.env, ~/.omp/agent/.env    dotenv credential files (API keys)
+#   ~/.omp/profiles/<name>/           account profiles (--profile NAME):
+#                                      config.yml (required; becomes the
+#                                      per-project config), .env and
+#                                      models.yml (optional; replace the
+#                                      shared mounts for that run). Host-side,
+#                                      shared across projects.
 #
 # Three constraints drive the layout below:
 #   1. agent.db is a WAL-mode SQLite database: its -wal/-shm sidecars must
@@ -61,6 +67,9 @@ VERSION_FILE="OMP_VERSION"
 
 # Harness-specific flags
 WITH_CREDENTIALS=false
+# Account profile selector (--profile NAME); resolved in ensure_profile
+OMP_PROFILE_NAME=""
+PROFILE_DIR=""
 
 # Shareable config directories / files under ~/.omp/agent (bind-mounted
 # directly; no rename-on-save constraint like config.yml has)
@@ -86,6 +95,22 @@ harness_parse_arg() {
             WITH_CREDENTIALS=true
             ARG_SHIFT=1
             ;;
+        --profile)
+            if [[ -z "${2:-}" ]]; then
+                log_error "--profile requires a profile name"
+                exit 1
+            fi
+            OMP_PROFILE_NAME="$2"
+            ARG_SHIFT=2
+            ;;
+        --profile=*)
+            OMP_PROFILE_NAME="${1#*=}"
+            if [[ -z "$OMP_PROFILE_NAME" ]]; then
+                log_error "--profile requires a profile name"
+                exit 1
+            fi
+            ARG_SHIFT=1
+            ;;
         *)
             return 1
             ;;
@@ -94,6 +119,29 @@ harness_parse_arg() {
 
 harness_extra_help() {
     echo "  --with-credentials       Mount ~/.omp/.env and ~/.omp/agent/.env read-only (API keys as dotenv)"
+    echo "  --profile NAME           Launch with host account profile ~/.omp/profiles/NAME"
+    echo "                           (its config.yml becomes the per-project config; .env and"
+    echo "                           models.yml, when present, replace the shared ones for this run)"
+}
+
+# Resolve the account profile (--profile NAME) before any config work:
+#   OMP_CONFIG_DIR   the omp root (~/.omp)
+#   PROFILE_DIR      ~/.omp/profiles/<name> (must contain at least a config.yml)
+#   OMP_AGENT_DIR    unchanged; the profile's config.yml replaces the per-project
+#                    copy in harness_setup_project, its .env/models.yml replace
+#                    the shared mounts in harness_mounts (per-run, host files)
+ensure_profile() {
+    [[ -n "$OMP_PROFILE_NAME" ]] || return 0
+    if [[ ! "$OMP_PROFILE_NAME" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
+        log_error "Invalid profile name '$OMP_PROFILE_NAME' (must match ^[a-z0-9][a-z0-9._-]{0,63}\$)"
+        exit 1
+    fi
+    PROFILE_DIR="${OMP_CONFIG_DIR}/profiles/${OMP_PROFILE_NAME}"
+    if [[ ! -f "${PROFILE_DIR}/config.yml" ]]; then
+        log_error "Profile config not found: ${PROFILE_DIR}/config.yml"
+        log_error "Create it (e.g. copy ${OMP_CONFIG_DIR}/agent/config.yml and edit models/roles/keys), then rerun with --profile ${OMP_PROFILE_NAME}"
+        exit 1
+    fi
 }
 
 # Ensure global config files and directories exist
@@ -109,6 +157,12 @@ harness_ensure_config() {
 
     # Global config (empty file is valid YAML)
     [[ -f "${OMP_AGENT_DIR}/config.yml" ]] || touch "${OMP_AGENT_DIR}/config.yml"
+
+    # Resolve the account profile now that flags are parsed (box_main calls
+    # this hook after harness_parse_arg): OMP_CONFIG_DIR is set above and
+    # the profile must be known before harness_setup_project copies the
+    # config and harness_mounts adds the per-run mounts.
+    ensure_profile
 
     # Credential dotenv files, shared across all projects. Opt-in via
     # --with-credentials; without the flag neither file is mounted, so
@@ -159,14 +213,28 @@ harness_setup_project() {
     # setting, which makes it look newer than a host edit made earlier. A
     # missing snapshot (first run, or a dir from an older ompbox) counts as
     # changed, so the host file wins.
-    local synced_config="${PROJECT_DATA_DIR}/config.yml.synced"
+
+    # Account profile (--profile NAME): its config.yml replaces the shared
+    # one as the per-project config source. Each source keeps its own sync
+    # snapshot, so switching profiles re-syncs the per-project copy on the
+    # next launch with that profile; the in-container copy of the previous
+    # source is simply replaced (profiles are chosen per launch).
+    local shared_config="${OMP_AGENT_DIR}/config.yml"
+    local profile_config="${PROFILE_DIR}/config.yml"
+    local synced_config="${PROJECT_DATA_DIR}/config.yml.synced${OMP_PROFILE_NAME:+.${OMP_PROFILE_NAME}}"
+    local config_source="$shared_config"
+    [[ -n "$OMP_PROFILE_NAME" ]] && config_source="$profile_config"
     if [[ ! -f "$project_config" ]]; then
-        cp "$shared_config" "$project_config"
-    elif ! cmp -s "$shared_config" "$synced_config" && ! cmp -s "$shared_config" "$project_config"; then
-        log_info "Shared config.yml changed, refreshing the per-project copy (in-container edits are replaced)"
-        cp "$shared_config" "$project_config"
+        cp "$config_source" "$project_config"
+    elif ! cmp -s "$config_source" "$synced_config" && ! cmp -s "$config_source" "$project_config"; then
+        if [[ -n "$OMP_PROFILE_NAME" ]]; then
+            log_info "Profile ${OMP_PROFILE_NAME}: refreshing the per-project config.yml copy (in-container edits are replaced)"
+        else
+            log_info "Shared config.yml changed, refreshing the per-project copy (in-container edits are replaced)"
+        fi
+        cp "$config_source" "$project_config"
     fi
-    cp "$shared_config" "$synced_config"
+    cp "$config_source" "$synced_config"
     # omp must be able to read and rewrite it whatever the host file's mode
     chmod u+rw "$project_config"
 
@@ -180,6 +248,22 @@ harness_setup_project() {
     # placeholder left over from a since-deleted shared file would otherwise
     # act as an empty override, so remove it; a non-empty placeholder is a
     # deliberate per-project override and is left alone.
+
+    # Account profile: the profile's own dotenv (if present) replaces the
+    # shared agent/.env mount for this run; per-account credentials.
+    PROFILE_AGENT_ENV=""
+    PROFILE_AGENT_ENV_MOUNTED=false
+    if [[ -n "$OMP_PROFILE_NAME" && -f "${PROFILE_DIR}/.env" ]]; then
+        PROFILE_AGENT_ENV="${PROFILE_DIR}/.env"
+        PROFILE_AGENT_ENV_MOUNTED=true
+    fi
+    # Account profile: the profile's models.yml (if present) replaces the
+    # shared models.yml mount for this run.
+    PROFILE_MODELS_YML=""
+    if [[ -n "$OMP_PROFILE_NAME" && -f "${PROFILE_DIR}/models.yml" ]]; then
+        PROFILE_MODELS_YML="${PROFILE_DIR}/models.yml"
+    fi
+
     for f in "${OMP_SHARED_FILES[@]}"; do
         local project_file="${PROJECT_DATA_DIR}/agent/${f}"
         if [[ -f "${OMP_AGENT_DIR}/${f}" ]]; then
@@ -202,26 +286,45 @@ harness_mounts() {
         add_mount "${OMP_AGENT_DIR}/${d}" "/home/coder/.omp/agent/${d}"
     done
 
-    # Shareable config files, only mounted when present on the host
-    local f
+    # Shareable config files, only mounted when present on the host; the
+    # profile's models.yml (if any) replaces the shared one for this run.
+    local f src
     for f in "${OMP_SHARED_FILES[@]}"; do
-        if [[ -f "${OMP_AGENT_DIR}/${f}" ]]; then
-            add_mount "${OMP_AGENT_DIR}/${f}" "/home/coder/.omp/agent/${f}" ro
+        src="${OMP_AGENT_DIR}/${f}"
+        if [[ "$f" == "models.yml" && -n "$PROFILE_MODELS_YML" ]]; then
+            src="$PROFILE_MODELS_YML"
+        fi
+        if [[ -f "$src" ]]; then
+            add_mount "$src" "/home/coder/.omp/agent/${f}" ro
         fi
     done
 
-    # Credentials (opt-in via --with-credentials, read-only dotenv files).
-    # harness_ensure_config / harness_setup_project already created empty
-    # files when missing, so both always exist here (force_mount) and no
-    # "file missing" branch is needed. no_status: harness_log_status prints
-    # the "Credentials:" line itself, in its original position (before the
-    # GitHub summary block).
-    add_optional_mount WITH_CREDENTIALS "${OMP_CONFIG_DIR}/.env" "/home/coder/.omp/.env" ro force_mount "Credentials" " (shared across projects)" no_status
-    add_optional_mount WITH_CREDENTIALS "${OMP_AGENT_DIR}/.env" "/home/coder/.omp/agent/.env" ro force_mount "Credentials" " (shared across projects)" no_status
+    # Credentials (read-only dotenv files). Default: the shared files,
+    # opt-in via --with-credentials; harness_ensure_config already created
+    # empty files when missing, so both always exist here (force_mount) and
+    # no "file missing" branch is needed. With a profile, the profile's own
+    # dotenv replaces the shared agent/.env mount (per-account credentials).
+    # no_status: harness_log_status prints the "Credentials:" line itself,
+    # in its original position (before the GitHub summary block).
+    if $PROFILE_AGENT_ENV_MOUNTED; then
+        add_mount "$PROFILE_AGENT_ENV" "/home/coder/.omp/agent/.env" ro
+    else
+        add_optional_mount WITH_CREDENTIALS "${OMP_CONFIG_DIR}/.env" "/home/coder/.omp/.env" ro force_mount "Credentials" " (shared across projects)" no_status
+        add_optional_mount WITH_CREDENTIALS "${OMP_AGENT_DIR}/.env" "/home/coder/.omp/agent/.env" ro force_mount "Credentials" " (shared across projects)" no_status
+    fi
 }
 
 harness_log_status() {
     log_info "Credentials: $(if $WITH_CREDENTIALS; then echo 'mounted (shared across projects)'; else echo 'not mounted (use --with-credentials)'; fi)"
+    if [[ -n "$OMP_PROFILE_NAME" ]]; then
+        log_info "Profile: ${OMP_PROFILE_NAME} (config: ${PROFILE_DIR}/config.yml)"
+        if $PROFILE_AGENT_ENV_MOUNTED; then
+            log_info "Profile credentials: ${PROFILE_DIR}/.env"
+        fi
+        if [[ -n "$PROFILE_MODELS_YML" ]]; then
+            log_info "Profile models.yml: ${PROFILE_DIR}/models.yml"
+        fi
+    fi
 }
 
 # Load the shared engine and run. Two supported layouts:

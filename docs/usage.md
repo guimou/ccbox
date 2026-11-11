@@ -50,7 +50,29 @@ The container image is automatically pulled from `quay.io/guimou/{ccbox,ocbox,qc
 | `--install` | Show OS/shell-specific installation instructions |
 | `--` | Everything after is passed to the harness CLI |
 
-ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`, `--settings <name>` (see [Settings Variants](#settings-variants-ccbox)). `--with-credentials` is available on all five launchers (see below).
+ccbox-only flags: `--with-teams`, `--with-tmux`, `--safe-mode`, `--settings <name>` (see [Settings Variants](#settings-variants-ccbox)). ompbox-only: `--profile <name>` (see [Account Profiles](#account-profiles-ompbox)). `--with-credentials` is available on all five launchers (see below).
+
+## Account Profiles (ompbox)
+
+```bash
+ompbox --profile red        # use ~/.omp/profiles/red/config.yml as the config for this launch
+ompbox --profile redfree    # switch accounts: same repo, different models/credentials
+```
+
+An account profile is a host-side directory under `~/.omp/profiles/<name>/`, shared across all projects:
+
+- `config.yml` (required) — a full omp config (model roles, providers, fallbacks). It replaces `~/.omp/agent/config.yml` as the source for the per-project config copy, with its own change-tracking snapshot: launching with the same profile keeps in-container edits (until the host profile file changes), switching profiles replaces the per-project copy with the new profile's content.
+- `.env` (optional) — replaces the `~/.omp/agent/.env` credential mount for this run (per-account dotenv API keys, still read-only). Without it, the shared credential mounts apply as usual (`--with-credentials`).
+- `models.yml` (optional) — replaces the shared `~/.omp/agent/models.yml` mount for this run.
+
+Sessions, `agent.db` (OAuth tokens, `/login`-saved keys, memories) always stay per-project: switching profiles changes which account/config the container uses, not where its state is stored. Profile names must match `[a-z0-9][a-z0-9._-]{0,63}`. A missing profile config is a hard error; the launcher prints how to create one. Note this is a config/credential overlay, not omp's native `--profile` state isolation (which does not persist inside the container, since `~/.omp` itself is not a mount point).
+
+Typical shell aliases:
+
+```bash
+alias ompred='ompbox --profile red --with-gitconfig --with-credentials'
+alias ompredfree='ompbox --profile redfree --with-gitconfig --with-credentials'
+```
 
 ## Runtimes
 
@@ -300,6 +322,8 @@ ompbox --with-credentials  # mount ~/.omp/.env and ~/.omp/agent/.env, read-only 
 The file is mounted read-write, created (empty) on the host if it does not exist yet — except ompbox's, which are mounted read-only. Without the flag, the container uses its own empty credential file — so `claude /login` (ccbox), `opencode auth login` (ocbox), the `/auth` flow (qcbox), or `codex login` (cxbox) inside the container does not persist to the host.
 
 ompbox is different: OAuth and `/login`-saved API keys live in the per-project `agent.db` (a SQLite database), not in a dotenv file, so `--with-credentials` cannot share them — `/login` (browser flow, or headless by pasting the callback URL) always stays local to the project it was run in. `--with-credentials` only shares dotenv-style keys placed in `~/.omp/.env` or `~/.omp/agent/.env`.
+
+With `--profile <name>`, the profile's own `~/.omp/profiles/<name>/.env` replaces the `~/.omp/agent/.env` mount for that run (per-account dotenv keys), and the profile's `models.yml`, if present, replaces the shared one — see [Account Profiles](#account-profiles-ompbox).
 
 ## Firewall
 

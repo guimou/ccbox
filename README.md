@@ -94,6 +94,7 @@ ccbox --build-base        # Also rebuild the shared base image locally
 ccbox --local             # Use the locally-built image
 ccbox -- --version        # Pass arguments to the harness CLI
 ccbox --settings redhat   # Use ~/.claude/settings-redhat.json as settings.json
+ompbox --profile red      # Launch with a host-side account profile (~/.omp/profiles/red)
 ccbox --help              # All options
 ```
 
