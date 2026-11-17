@@ -929,11 +929,22 @@ select_runtime() {
 # Clipboard/display access for image pasting (CTRL+V)
 add_clipboard_mounts() {
     if [[ "$OS_TYPE" == "linux" ]]; then
-        if [[ -n "$WAYLAND_DISPLAY" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+        # A shell outside the graphical session (SSH, a daemon, a stripped
+        # env) can miss $WAYLAND_DISPLAY or carry a stale one while the
+        # socket is right there; fall back to the default name, like
+        # libwayland's wl_display_connect(NULL).
+        local wl_display=""
+        if [[ -n "$WAYLAND_DISPLAY" && -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+            wl_display="$WAYLAND_DISPLAY"
+        elif [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/wayland-0" ]]; then
+            wl_display="wayland-0"
+        fi
+        if [[ -n "$wl_display" ]]; then
             # Wayland clipboard access
-            add_mount "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" "ro,nolabel"
-            add_env WAYLAND_DISPLAY "$WAYLAND_DISPLAY"
+            add_mount "${XDG_RUNTIME_DIR}/${wl_display}" "${XDG_RUNTIME_DIR}/${wl_display}" "ro,nolabel"
+            add_env WAYLAND_DISPLAY "$wl_display"
             add_env XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR"
+            CLIPBOARD_STATUS="enabled (Wayland)"
         elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
             # X11 clipboard access
             add_mount /tmp/.X11-unix /tmp/.X11-unix "ro,nolabel"
@@ -941,12 +952,17 @@ add_clipboard_mounts() {
             if [[ -f "${HOME}/.Xauthority" ]]; then
                 add_mount "${HOME}/.Xauthority" /home/coder/.Xauthority "ro"
             fi
+            CLIPBOARD_STATUS="enabled (X11)"
+        else
+            log_warn "No display server found: clipboard image pasting will not work"
+            CLIPBOARD_STATUS="unavailable (no display server)"
         fi
     elif [[ "$OS_TYPE" == "macos" ]]; then
         # macOS: basic X11 support via XQuartz (if available)
         if [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
             add_mount /tmp/.X11-unix /tmp/.X11-unix "ro,nolabel"
             add_env DISPLAY "$DISPLAY"
+            CLIPBOARD_STATUS="enabled (X11)"
         fi
     fi
 }
@@ -1302,7 +1318,7 @@ box_main() {
     log_info "Workspace: $WORKSPACE_DIR"
     log_info "Session: $SESSION_ID"
     log_info "Firewall: $(if $NO_FIREWALL; then echo 'disabled'; else echo 'enabled'; fi)"
-    log_info "Clipboard: $(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)"
+    log_info "Clipboard: ${CLIPBOARD_STATUS:-$(if $NO_CLIPBOARD; then echo 'disabled'; else echo 'enabled'; fi)}"
     [[ -n "$MEMORY_BUDGET_STATUS" ]] && log_info "$MEMORY_BUDGET_STATUS"
     harness_log_status
     if $NO_GITHUB; then
