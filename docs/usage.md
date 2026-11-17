@@ -339,9 +339,10 @@ Restricts outbound connections to an allowlist baked into the image (GitHub, pac
 
 Image pasting (CTRL+V) requires display server access:
 
-- **Linux/Wayland**: automatically detected via `$WAYLAND_DISPLAY`
+- **Linux/Wayland**: automatically detected via `$WAYLAND_DISPLAY`, falling back to `wayland-0` in `$XDG_RUNTIME_DIR` when the variable is unset or stale but the socket exists (shells started outside the graphical session, e.g. over SSH or from a daemon)
 - **Linux/X11**: automatically detected via `$DISPLAY` and `/tmp/.X11-unix`
 - **macOS**: requires [XQuartz](https://www.xquartz.org/) with "Allow connections from network clients" enabled
+- **None found**: the launcher prints a `[WARN] No display server found` line and reports `Clipboard: unavailable` in the status, so a clipboard-blind session is never silent
 
 To disable clipboard access: `ccbox --no-clipboard`
 
