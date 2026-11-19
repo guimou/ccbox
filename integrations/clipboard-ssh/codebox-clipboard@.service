@@ -1,0 +1,8 @@
+[Unit]
+Description=codebox clipboard image request
+
+[Service]
+ExecStart=%h/.local/bin/codebox-clipboard-serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

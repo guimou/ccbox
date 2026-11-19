@@ -120,10 +120,12 @@ For local development, you can build the image locally:
 - `init-firewall.sh` - Firewall initialization script (iptables/ipset)
 - `lib/box-common.sh` - Shared launcher engine (sourced by all five launchers): runtime-neutral session spec (`add_mount` / `add_env`) plus two runtime backends that render it, Podman (`podman run`, workstation) and Apptainer (`apptainer exec` on a SIF, long-lived pod; selected with `--runtime` / `CODEBOX_RUNTIME`)
 - `tests/render-test.sh` + `tests/golden/` - Golden test of the rendered command line for every launcher (stub runtime; run it, and re-record when a change to mounts/env is intended)
+- `tests/clipboard-bridge-test.sh` - Functional test of the clipboard image bridge (host helper + container shim against a stub `wl-paste`, including the SSH-forwarded source)
 - `ccbox` / `ocbox` / `qcbox` / `cxbox` / `ompbox` - Host launch scripts (thin wrappers defining harness identity, mounts, and env passthrough)
 - `CLAUDE_VERSION` / `OPENCODE_VERSION` / `QWENCODE_VERSION` / `CODEX_VERSION` / `OMP_VERSION` - Version pin files (overridden by `--claude-version` / `--opencode-version` / `--qwen-version` / `--codex-version` / `--omp-version`)
 - `k8s/` - Running in a long-lived pod on Kubernetes/OpenShift: `Containerfile` + `entrypoint.sh` (CentOS Stream 9 pod image `quay.io/guimou/codebox-pod`: Apptainer, tmux, the launchers; no dev tooling, that is in the SIF), `cluster/` (SCC + ClusterRole, cluster-admin, once), `base/` + `overlays/example/` (kustomize: service account, PVC, Deployment; the overlay sets namespace, RWX storage class, optional env Secret), `gen-egress-firewall.sh` (OVN EgressFirewall from the firewall domain lists, the pod-level replacement for `--with-firewall`)
 - `integrations/herdr-app-agent-memory/` - Herdr app mod (gpui-kit JavaScript panel, installed as `~/.config/herdr-app/mods/agent-memory`): maps each agent to its codebox container via the terminal's foreground `podman run --name`, shows per-agent working set (cgroup `memory.current` minus `inactive_file`) and the `codebox.slice` budget, toasts near `memory.high`; `agent_mem.py` (stdlib Python) reads the cgroups/`/proc` for it, `logic.js` holds the pure helpers
+- `integrations/clipboard-ssh/` - Clipboard image server for the machine the user types on (`codebox-clipboard-serve` + systemd user socket/service units), reached by a remote launcher's clipboard bridge through an SSH-forwarded unix socket
 - `docs/` - User-facing documentation: `usage.md`, `architecture.md`, `development.md`, `kubernetes.md` (README holds only the minimum and links here — keep them in sync when changing behavior)
 
 ## What's Included
@@ -278,6 +280,7 @@ The launchers also run inside a long-lived pod (`docs/kubernetes.md`): the pod i
   - `~/.gitconfig` → `/home/coder/.gitconfig` (read-only, only with `--with-gitconfig`)
   - any host directory → the given absolute container path (read-write, or `ro`; only with `--mount HOST:CONTAINER[:ro]`, repeatable)
   - npm global prefix → `/home/coder/.npm-global` (read-only, auto-detected)
+  - Clipboard: the Wayland/X11 socket (read-only), or with SELinux enforcing the clipboard bridge directory → `/run/codebox-clipboard` plus its `wl-paste` shim → `/usr/local/bin/wl-paste`
   - PulseAudio socket (for audio support)
   - `/etc/localtime` (for timezone sync)
 - **SELinux**: Uses `:z` volume labels for shared relabeling (supports multi-session)
@@ -294,6 +297,8 @@ The launchers also run inside a long-lived pod (`docs/kubernetes.md`): the pod i
 Image pasting (CTRL+V) is enabled by default. The container mounts display sockets to access the host clipboard:
 - **Wayland**: Mounts `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (read-only)
 - **X11**: Mounts `/tmp/.X11-unix` and `~/.Xauthority` (read-only)
+
+With SELinux enforcing, the display socket is not wired at all (`selinux_enforcing` in `lib/box-common.sh`): a confined container cannot connect to it, and exporting `WAYLAND_DISPLAY`/`DISPLAY` next to a dead socket makes the harness use `wl-copy`/`wl-paste` (failing) instead of the terminal's OSC 52 clipboard. Text copy and middle-click paste then go through the terminal, and images through the clipboard bridge (`clipboard_bridge_*` in `lib/box-common.sh`): a host helper process started by the launcher runs the host's `wl-paste`/`xclip` on request (image types only), talking to a `wl-paste` shim mounted at `/usr/local/bin/wl-paste` through a FIFO and files in `$XDG_RUNTIME_DIR/codebox-clipboard/<container name>/shared` (mounted at `/run/codebox-clipboard`). The local source requires `wl-clipboard` (or `xclip`) on the host. For sessions used over SSH, the helper first asks a clipboard socket forwarded from the user's machine (`$XDG_RUNTIME_DIR/codebox-clipboard-ssh.sock`, `CODEBOX_CLIPBOARD_SOCKET` overrides; needs `python3` on the host), served there by `integrations/clipboard-ssh/` (socket-activated `codebox-clipboard-serve`); the source is chosen per paste. The bridge is also set up when that socket answers at launch or the host has no display. Setup is documented in docs/usage.md "Pasting Images over SSH".
 
 To disable clipboard access: `./ccbox --no-clipboard`
 

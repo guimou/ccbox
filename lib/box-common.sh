@@ -926,6 +926,216 @@ select_runtime() {
 
 # --- Host-side features (clipboard, audio, npm-global, GitHub token) --------
 
+# True when SELinux is enforcing on the host. A confined container
+# (container_t) is then denied connect() on any unix socket served by a host
+# process (Wayland compositor, X server), whatever the label of the socket
+# file. CODEBOX_SELINUX_ROOT relocates selinuxfs for the tests.
+selinux_enforcing() {
+    local enforce="${CODEBOX_SELINUX_ROOT:-/sys/fs/selinux}/enforce"
+    [[ "$OS_TYPE" == "linux" && -r "$enforce" && "$(< "$enforce")" == "1" ]]
+}
+
+# --- Clipboard image bridge (SELinux enforcing hosts) -----------------------
+# The container cannot reach the display server there, so the host fetches
+# clipboard images on its behalf. A helper process on the host (started
+# here, exits with the session) reads requests from a FIFO in a per-session
+# directory shared with the container and answers with files in that
+# directory; a `wl-paste` shim mounted in the container speaks the other
+# side. Only image types are served: clipboard text never crosses, and the
+# container gets no display access at all.
+#
+# The helper has two sources, tried in this order for every request:
+#   1. a clipboard socket forwarded over SSH from the machine the user is
+#      typing on (integrations/clipboard-ssh), when something answers on it;
+#   2. the clipboard of this host (wl-paste / xclip), when it has a display.
+# So a session started on a remote machine pastes the images of whoever is
+# connected, and the bridge is also what a headless host uses.
+
+CLIPBOARD_IMAGE_TYPES='image/(png|jpeg|jpg|gif|webp|bmp)'
+
+# The shim mounted as /usr/local/bin/wl-paste in the container. It answers
+# the two calls harnesses make for images (`-l`, `--type image/...`) and
+# fails for everything else, like a wl-paste without a display.
+clipboard_bridge_shim() {
+    cat <<'SHIM'
+#!/bin/bash
+# codebox clipboard bridge: fetches clipboard images from the host
+dir="${CODEBOX_CLIPBOARD_DIR:-/run/codebox-clipboard}"
+op="" type=""
+while (( $# )); do
+    case "$1" in
+        -l|--list-types) op=list ;;
+        -t|--type)       type="${2:-}"; shift ;;
+        --type=*)        type="${1#*=}" ;;
+        -p|--primary)    exit 1 ;;
+    esac
+    shift
+done
+[[ -z "$op" && -n "$type" ]] && op=get
+[[ -n "$op" && -p "${dir}/req" ]] || exit 1
+id="$$.${RANDOM}"
+# The host keeps the FIFO open; if it is gone, opening blocks: give up
+timeout 2 bash -c 'printf "%s\n" "$1" > "$2"' _ "${id} ${op} ${type}" "${dir}/req" 2>/dev/null || exit 1
+for (( i = 0; i < 120; i++ )); do
+    [[ -f "${dir}/${id}.rc" ]] && break
+    sleep 0.05
+done
+rc=1
+if [[ -f "${dir}/${id}.rc" ]]; then
+    rc=$(< "${dir}/${id}.rc")
+    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
+    (( rc == 0 )) && cat "${dir}/${id}.out"
+fi
+rm -f "${dir}/${id}.rc" "${dir}/${id}.out"
+exit "$rc"
+SHIM
+}
+
+# Forwarded clipboard socket (see docs/usage.md "Pasting Images over SSH")
+clipboard_ssh_socket() {
+    echo "${CODEBOX_CLIPBOARD_SOCKET:-${XDG_RUNTIME_DIR:+${XDG_RUNTIME_DIR}/codebox-clipboard-ssh.sock}}"
+}
+
+# Client for that socket: sends "$2[ $3]" (list | get TYPE) to socket $1 and
+# prints the answer. The server replies "ok\n" + payload, or "no\n".
+# Exit 0 answered, 1 no such content, 3 nothing reachable on the socket.
+CLIPBOARD_SSH_CLIENT='
+import socket, sys
+path, request = sys.argv[1], " ".join(a for a in sys.argv[2:] if a)
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(10)
+try:
+    s.connect(path)
+except OSError:
+    sys.exit(3)
+try:
+    s.sendall(request.encode() + b"\n")
+    s.shutdown(socket.SHUT_WR)
+    chunks = []
+    while True:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+except OSError:
+    sys.exit(3)
+data = b"".join(chunks)
+if not data:
+    sys.exit(3)
+if not data.startswith(b"ok\n"):
+    sys.exit(1)
+sys.stdout.buffer.write(data[3:])
+'
+clipboard_ssh_query() {
+    local sock
+    sock=$(clipboard_ssh_socket)
+    [[ -n "$sock" && -S "$sock" ]] || return 3
+    command -v python3 > /dev/null 2>&1 || return 3
+    python3 -c "$CLIPBOARD_SSH_CLIENT" "$sock" "$@" 2>/dev/null
+}
+
+# Answer one request from the best source: $1 local tool (or empty), $2
+# list|get, $3 type. The forwarded socket wins whenever something answers.
+clipboard_bridge_answer() {
+    local tool="$1" op="$2" type="$3" rc=0
+    if [[ "$op" == list ]]; then
+        clipboard_ssh_query list | grep -E "^${CLIPBOARD_IMAGE_TYPES}\$"
+        rc=${PIPESTATUS[0]}
+        (( rc == 0 )) && return 0
+    else
+        clipboard_ssh_query get "$type" || rc=$?
+    fi
+    (( rc == 3 )) || return "$rc"
+    clipboard_bridge_query "$tool" "$op" "$type"
+}
+
+# Run one host clipboard query: $1 tool (wl-paste|xclip), $2 list|get, $3 type
+clipboard_bridge_query() {
+    local tool="$1" op="$2" type="$3"
+    case "${tool}:${op}" in
+        wl-paste:list) WAYLAND_DISPLAY="$CLIPBOARD_BRIDGE_DISPLAY" timeout 3 wl-paste --list-types 2>/dev/null | grep -E "^${CLIPBOARD_IMAGE_TYPES}\$" ;;
+        wl-paste:get)  WAYLAND_DISPLAY="$CLIPBOARD_BRIDGE_DISPLAY" timeout 5 wl-paste --type "$type" 2>/dev/null ;;
+        xclip:list)    timeout 3 xclip -selection clipboard -t TARGETS -o 2>/dev/null | grep -E "^${CLIPBOARD_IMAGE_TYPES}\$" ;;
+        xclip:get)     timeout 5 xclip -selection clipboard -t "$type" -o 2>/dev/null ;;
+        *)             return 1 ;;
+    esac
+}
+
+# Host side of the bridge: serve requests ("ID list" / "ID get TYPE", one
+# per line on fd 3) until process $2 (the session) is gone, then remove the
+# session directory $1. Everything read from the container is validated,
+# and answers are written in a host-only directory and renamed into the
+# shared one: the container owns the shared directory, so a file opened
+# there by name could be a symlink it planted.
+clipboard_bridge_serve() {
+    local base="$1" pid="$2" tool="$3"
+    local shared="${base}/shared" id op type tmp rc
+    trap '' INT QUIT
+    trap 'rm -rf "$base"; exit 0' HUP TERM
+    while kill -0 "$pid" 2>/dev/null; do
+        id="" op="" type=""
+        read -r -t 2 -u 3 id op type || continue
+        [[ "$id" =~ ^[0-9]+\.[0-9]+$ ]] || continue
+        [[ "$op" == list || ( "$op" == get && "$type" =~ ^${CLIPBOARD_IMAGE_TYPES}$ ) ]] || continue
+        tmp="${base}/host/${id}"
+        rc=0
+        clipboard_bridge_answer "$tool" "$op" "$type" > "${tmp}.out" || rc=$?
+        echo "$rc" > "${tmp}.rc"
+        # New files carry the host label; give them the shared directory's
+        # (container-readable) one. A no-op failure without SELinux.
+        chcon --reference="$shared" "${tmp}.out" "${tmp}.rc" 2>/dev/null || true
+        mv -T "${tmp}.out" "${shared}/${id}.out" 2>/dev/null || true
+        mv -T "${tmp}.rc" "${shared}/${id}.rc" 2>/dev/null || true
+        rm -f "${tmp}.out" "${tmp}.rc"
+    done
+    rm -rf "$base"
+}
+
+# Set up the bridge for this session: $1 Wayland display name (or empty),
+# $2 X11 display (or empty; neither on a headless host). Sets
+# CLIPBOARD_BRIDGE_TOOL to the local tool in use (empty if none) and
+# CLIPBOARD_BRIDGE_NEEDS to the host package that would provide it when it
+# is missing. Returns 1 when no source can ever answer.
+clipboard_bridge_setup() {
+    local wl="$1" x11="$2" tool="" pkg=""
+    if [[ -n "$wl" ]]; then
+        tool="wl-paste"; pkg="wl-clipboard"
+    elif [[ -n "$x11" ]]; then
+        tool="xclip"; pkg="xclip"
+    fi
+    CLIPBOARD_BRIDGE_TOOL="" CLIPBOARD_BRIDGE_NEEDS=""
+    if [[ -n "$tool" ]] && ! command -v "$tool" > /dev/null 2>&1; then
+        CLIPBOARD_BRIDGE_NEEDS="$pkg"
+        tool=""
+    fi
+    [[ -n "$tool" ]] || command -v python3 > /dev/null 2>&1 || return 1
+    [[ -n "$XDG_RUNTIME_DIR" && -d "$XDG_RUNTIME_DIR" && -w "$XDG_RUNTIME_DIR" ]] || return 1
+
+    local base="${XDG_RUNTIME_DIR}/codebox-clipboard/${CONTAINER_NAME}"
+    rm -rf "$base"
+    mkdir -p "$base" || return 1
+    chmod 700 "${XDG_RUNTIME_DIR}/codebox-clipboard" "$base"
+    mkdir -m 700 "${base}/shared" "${base}/host" "${base}/shim" || return 1
+    mkfifo -m 600 "${base}/shared/req" || return 1
+    clipboard_bridge_shim > "${base}/shim/wl-paste"
+    chmod 755 "${base}/shim/wl-paste"
+
+    add_mount "${base}/shared" /run/codebox-clipboard
+    add_mount "${base}/shim/wl-paste" /usr/local/bin/wl-paste "ro"
+
+    CLIPBOARD_BRIDGE_DISPLAY="$wl"
+    # $$ is the launcher, which later execs the runtime and keeps its PID:
+    # the helper lives exactly as long as the session.
+    (
+        exec 3<> "${base}/shared/req" < /dev/null > /dev/null 2>&1
+        set +e
+        clipboard_bridge_serve "$base" "$$" "$tool"
+    ) &
+    disown
+    CLIPBOARD_BRIDGE_TOOL="$tool"
+    return 0
+}
+
 # Clipboard/display access for image pasting (CTRL+V)
 add_clipboard_mounts() {
     if [[ "$OS_TYPE" == "linux" ]]; then
@@ -939,20 +1149,51 @@ add_clipboard_mounts() {
         elif [[ -n "$XDG_RUNTIME_DIR" && -S "${XDG_RUNTIME_DIR}/wayland-0" ]]; then
             wl_display="wayland-0"
         fi
-        if [[ -n "$wl_display" ]]; then
+        local x11_display=""
+        if [[ -z "$wl_display" && -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+            x11_display="$DISPLAY"
+        fi
+        # Something answering on a forwarded clipboard socket means the
+        # user sits at another machine: its clipboard is the one to paste
+        local ssh_live=false ssh_rc=0
+        clipboard_ssh_query list > /dev/null 2>&1 || ssh_rc=$?
+        (( ssh_rc == 3 )) || ssh_live=true
+        if [[ -n "$wl_display" ]] && ! selinux_enforcing && ! $ssh_live; then
             # Wayland clipboard access
             add_mount "${XDG_RUNTIME_DIR}/${wl_display}" "${XDG_RUNTIME_DIR}/${wl_display}" "ro,nolabel"
             add_env WAYLAND_DISPLAY "$wl_display"
             add_env XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR"
             CLIPBOARD_STATUS="enabled (Wayland)"
-        elif [[ -n "$DISPLAY" && -d /tmp/.X11-unix ]]; then
+        elif [[ -n "$x11_display" ]] && ! selinux_enforcing && ! $ssh_live; then
             # X11 clipboard access
             add_mount /tmp/.X11-unix /tmp/.X11-unix "ro,nolabel"
-            add_env DISPLAY "$DISPLAY"
+            add_env DISPLAY "$x11_display"
             if [[ -f "${HOME}/.Xauthority" ]]; then
                 add_mount "${HOME}/.Xauthority" /home/coder/.Xauthority "ro"
             fi
             CLIPBOARD_STATUS="enabled (X11)"
+        elif clipboard_bridge_setup "$wl_display" "$x11_display"; then
+            # No usable display socket for the container: SELinux denies a
+            # confined container the connection (and exporting
+            # WAYLAND_DISPLAY/DISPLAY next to a dead socket makes the
+            # harness use wl-copy/wl-paste, which fail, instead of the
+            # terminal's OSC 52 clipboard), the clipboard that matters is
+            # the SSH client's, or this host has no display. Text goes
+            # through the terminal, images through the bridge.
+            local sources=""
+            $ssh_live && sources="SSH-forwarded clipboard"
+            [[ -n "$CLIPBOARD_BRIDGE_TOOL" ]] && sources="${sources:+${sources}, }host ${CLIPBOARD_BRIDGE_TOOL}"
+            if [[ -n "$sources" ]]; then
+                CLIPBOARD_STATUS="images via the host bridge (${sources}), text via the terminal"
+            else
+                CLIPBOARD_STATUS="text via the terminal; images once a clipboard socket is forwarded over SSH"
+            fi
+            if [[ -n "$CLIPBOARD_BRIDGE_NEEDS" ]]; then
+                log_warn "Pasting images from this machine's clipboard needs ${CLIPBOARD_BRIDGE_NEEDS} installed on the host"
+            fi
+        elif [[ -n "${wl_display}${x11_display}" ]]; then
+            log_warn "Image pasting needs ${CLIPBOARD_BRIDGE_NEEDS:-wl-clipboard} on the host (SELinux blocks the display socket in the container)"
+            CLIPBOARD_STATUS="text only, via the terminal (install ${CLIPBOARD_BRIDGE_NEEDS:-wl-clipboard} on the host for images)"
         else
             log_warn "No display server found: clipboard image pasting will not work"
             CLIPBOARD_STATUS="unavailable (no display server)"

@@ -61,6 +61,13 @@ echo "cpuset cpu io memory hugetlb pids misc" > "${CGROUP_ROOT}/cgroup.controlle
 echo "cpu memory pids" > "${USER_CG}/cgroup.controllers"
 SLICE_DIR="${FAKE_HOME}/.config/systemd/user"
 
+# Wayland socket and selinuxfs trees for the clipboard scenarios
+RUNTIME_DIR="${ROOT}/run"
+mkdir -p "$RUNTIME_DIR" "${ROOT}/selinux-enforcing" "${ROOT}/selinux-permissive"
+python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "${RUNTIME_DIR}/wayland-0"
+echo 1 > "${ROOT}/selinux-enforcing/enforce"
+echo 0 > "${ROOT}/selinux-permissive/enforce"
+
 # --- stubs ---------------------------------------------------------------
 
 cat > "${STUBS}/podman" <<'EOF'
@@ -112,6 +119,9 @@ cat > "${STUBS}/npm" <<'EOF'
 #!/bin/bash
 [[ "$*" == "config get prefix" ]] && echo "${NPM_PREFIX}"
 EOF
+
+# Host clipboard tool: its presence enables the clipboard image bridge
+printf '#!/bin/bash\nexit 1\n' > "${STUBS}/wl-paste"
 
 chmod +x "${STUBS}"/*
 
@@ -177,6 +187,11 @@ SCENARIOS=(
     "memory-env-off|cxbox|"
     "memory-flag-off|ccbox|--no-memory-limit"
     "memory-unavailable|qcbox|"
+    # clipboard: the Wayland socket is wired (found without $WAYLAND_DISPLAY),
+    # except when SELinux is enforcing, where a container cannot connect to
+    # it: the image bridge (shared dir + wl-paste shim) is mounted instead
+    "clipboard-wayland|ccbox|"
+    "clipboard-selinux|ccbox|"
     "!memory-invalid-max|ccbox|"
     "!memory-invalid-swap|ccbox|"
     "!memory-invalid-slice|ccbox|"
@@ -256,6 +271,8 @@ for entry in "${SCENARIOS[@]}"; do
         memory-percent)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=60% CODEBOX_MEMORY_HIGH=50% CODEBOX_SLICE=agents.slice) ;;
         memory-env-off)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=off) ;;
         memory-unavailable)   EXTRA_ENV=(STUB_CGROUP_MANAGER=cgroupfs) ;;
+        clipboard-wayland)    EXTRA_ENV=("XDG_RUNTIME_DIR=${RUNTIME_DIR}" "CODEBOX_SELINUX_ROOT=${ROOT}/selinux-permissive") ;;
+        clipboard-selinux)    EXTRA_ENV=("XDG_RUNTIME_DIR=${RUNTIME_DIR}" WAYLAND_DISPLAY=wayland-0 "CODEBOX_SELINUX_ROOT=${ROOT}/selinux-enforcing") ;;
         memory-invalid-max)   EXTRA_ENV=(CODEBOX_MEMORY_MAX=lots) ;;
         memory-invalid-swap)  EXTRA_ENV=(CODEBOX_MEMORY_SWAP_MAX=50%) ;;
         memory-invalid-slice) EXTRA_ENV=(CODEBOX_SLICE=../evil) ;;

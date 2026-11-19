@@ -1,0 +1,64 @@
+#!/bin/bash
+# Clipboard image server for codebox sessions running on another machine.
+#
+# Runs on the machine you are typing on, once per connection (systemd socket
+# activation, see codebox-clipboard.socket): stdin/stdout are the connection.
+# The launcher on the remote machine reaches it through a unix socket
+# forwarded over SSH and asks for the clipboard image when you press CTRL+V
+# in a harness (docs/usage.md, "Pasting Images over SSH").
+#
+# Protocol: one request line, "list" or "get <mime type>"; the answer is
+# "ok\n" followed by the payload (the image types, one per line, or the raw
+# image), or "no\n". Only image types are ever served: clipboard text is
+# never sent, whatever is asked.
+
+TYPES='image/(png|jpeg|jpg|gif|webp|bmp)'
+
+op="" type=""
+read -r -t 5 op type || true
+type="${type%$'\r'}"
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+tool=""
+if [[ -n "${WAYLAND_DISPLAY:-}" || -S "${runtime_dir}/wayland-0" ]]; then
+    tool="wl-paste"
+    export XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+elif [[ -n "${DISPLAY:-}" ]]; then
+    tool="xclip"
+fi
+if [[ -z "$tool" ]] || ! command -v "$tool" > /dev/null 2>&1; then
+    echo "codebox-clipboard-serve: no clipboard tool (install wl-clipboard, or xclip on X11)" >&2
+    printf 'no\n'
+    exit 0
+fi
+
+paste() {  # list | get TYPE
+    if [[ "$tool" == wl-paste ]]; then
+        if [[ "$1" == list ]]; then timeout 3 wl-paste --list-types; else timeout 5 wl-paste --type "$2"; fi
+    else
+        if [[ "$1" == list ]]; then timeout 3 xclip -selection clipboard -t TARGETS -o; else timeout 5 xclip -selection clipboard -t "$2" -o; fi
+    fi 2> /dev/null
+}
+
+case "$op" in
+    list)
+        if types=$(paste list | grep -E "^${TYPES}\$"); then
+            printf 'ok\n%s\n' "$types"
+        else
+            printf 'no\n'
+        fi
+        ;;
+    get)
+        tmp=$(mktemp) || { printf 'no\n'; exit 0; }
+        trap 'rm -f "$tmp"' EXIT
+        if [[ "$type" =~ ^${TYPES}$ ]] && paste get "$type" > "$tmp" && [[ -s "$tmp" ]]; then
+            printf 'ok\n'
+            cat "$tmp"
+        else
+            printf 'no\n'
+        fi
+        ;;
+    *)
+        printf 'no\n'
+        ;;
+esac
