@@ -941,8 +941,16 @@ selinux_enforcing() {
 # here, exits with the session) reads requests from a FIFO in a per-session
 # directory shared with the container and answers with files in that
 # directory; a `wl-paste` shim mounted in the container speaks the other
-# side. Only image types are served: clipboard text never crosses, and the
-# container gets no display access at all.
+# side. The container gets no display access at all. What crosses:
+#   - images of the clipboard (CTRL+V), read-only;
+#   - the selection: text selected in the harness is written to the host
+#     clipboard and primary selection, and the primary selection can be read
+#     back (middle-click paste). Harnesses do both with wl-copy/wl-paste as
+#     soon as WAYLAND_DISPLAY is set, so the bridge sets it to a name that
+#     is not a socket;
+#   - never the text of the regular clipboard (what CTRL+C, a password
+#     manager... put there): that request is refused.
+# Selection text only uses this host's own clipboard, never the SSH socket.
 #
 # The helper has two sources, tried in this order for every request:
 #   1. a clipboard socket forwarded over SSH from the machine the user is
@@ -953,29 +961,62 @@ selinux_enforcing() {
 
 CLIPBOARD_IMAGE_TYPES='image/(png|jpeg|jpg|gif|webp|bmp)'
 
-# The shim mounted as /usr/local/bin/wl-paste in the container. It answers
-# the two calls harnesses make for images (`-l`, `--type image/...`) and
-# fails for everything else, like a wl-paste without a display.
+# The shim mounted as /usr/local/bin/wl-paste and /usr/local/bin/wl-copy in
+# the container. It answers the calls harnesses make: wl-paste for images
+# (`-l`, `--type image/...`) and for the primary selection (`--primary`,
+# middle-click paste), wl-copy for what is selected in the harness. Reading
+# the regular clipboard as text fails, like a wl-paste without a display.
 clipboard_bridge_shim() {
     cat <<'SHIM'
 #!/bin/bash
-# codebox clipboard bridge: fetches clipboard images from the host
+# codebox clipboard bridge: clipboard access through a helper on the host
 dir="${CODEBOX_CLIPBOARD_DIR:-/run/codebox-clipboard}"
-op="" type=""
-while (( $# )); do
-    case "$1" in
-        -l|--list-types) op=list ;;
-        -t|--type)       type="${2:-}"; shift ;;
-        --type=*)        type="${1#*=}" ;;
-        -p|--primary)    exit 1 ;;
-    esac
-    shift
-done
-[[ -z "$op" && -n "$type" ]] && op=get
-[[ -n "$op" && -p "${dir}/req" ]] || exit 1
+[[ -p "${dir}/req" ]] || exit 1
 id="$$.${RANDOM}"
+op="" type="" primary=false
+if [[ "${0##*/}" == wl-copy ]]; then
+    text="" has_text=false
+    while (( $# )); do
+        case "$1" in
+            -p|--primary) primary=true ;;
+            -c|--clear)   exit 0 ;;
+            -t|--type)    shift ;;
+            -*)           ;;
+            *)            text+="${text:+ }$1"; has_text=true ;;
+        esac
+        shift
+    done
+    if $has_text; then
+        printf '%s' "$text" > "${dir}/${id}.in"
+    else
+        head -c 1048576 > "${dir}/${id}.in"
+    fi
+    op="copy"
+    if $primary; then type="primary"; else type="clipboard"; fi
+else
+    while (( $# )); do
+        case "$1" in
+            -l|--list-types) op=list ;;
+            -t|--type)       type="${2:-}"; shift ;;
+            --type=*)        type="${1#*=}" ;;
+            -p|--primary)    primary=true ;;
+        esac
+        shift
+    done
+    if $primary; then
+        # text of the primary selection only
+        [[ -z "$op" && ( -z "$type" || "$type" == text/* ) ]] || exit 1
+        op="primary" type=""
+    elif [[ -z "$op" && -n "$type" ]]; then
+        op="get"
+    fi
+    [[ -n "$op" ]] || exit 1
+fi
 # The host keeps the FIFO open; if it is gone, opening blocks: give up
-timeout 2 bash -c 'printf "%s\n" "$1" > "$2"' _ "${id} ${op} ${type}" "${dir}/req" 2>/dev/null || exit 1
+if ! timeout 2 bash -c 'printf "%s\n" "$1" > "$2"' _ "${id} ${op} ${type}" "${dir}/req" 2>/dev/null; then
+    rm -f "${dir}/${id}.in"
+    exit 1
+fi
 for (( i = 0; i < 120; i++ )); do
     [[ -f "${dir}/${id}.rc" ]] && break
     sleep 0.05
@@ -986,7 +1027,7 @@ if [[ -f "${dir}/${id}.rc" ]]; then
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
     (( rc == 0 )) && cat "${dir}/${id}.out"
 fi
-rm -f "${dir}/${id}.rc" "${dir}/${id}.out"
+rm -f "${dir}/${id}.rc" "${dir}/${id}.out" "${dir}/${id}.in"
 exit "$rc"
 SHIM
 }
@@ -1061,12 +1102,46 @@ clipboard_bridge_query() {
     esac
 }
 
-# Host side of the bridge: serve requests ("ID list" / "ID get TYPE", one
+# Selection text on the host: $1 tool (or empty), $2 base dir.
+# copy: put file $4 on the host selection $3 (clipboard|primary) and keep it
+# as the session's last selection. primary: print the host primary
+# selection, else that last selection (host without a display, or whose
+# clipboard tool cannot answer).
+clipboard_bridge_copy() {
+    local tool="$1" base="$2" sel="$3" file="$4"
+    cp -f "$file" "${base}/host/last-selection"
+    case "${tool}:${sel}" in
+        wl-paste:clipboard) WAYLAND_DISPLAY="$CLIPBOARD_BRIDGE_DISPLAY" timeout 3 wl-copy < "$file" ;;
+        wl-paste:primary)   WAYLAND_DISPLAY="$CLIPBOARD_BRIDGE_DISPLAY" timeout 3 wl-copy --primary < "$file" ;;
+        xclip:*)            timeout 3 xclip -selection "$sel" -i < "$file" ;;
+    esac > /dev/null 2>&1
+    return 0
+}
+clipboard_bridge_primary() {
+    local tool="$1" base="$2" out
+    out="${base}/host/primary.$$"
+    case "$tool" in
+        wl-paste) WAYLAND_DISPLAY="$CLIPBOARD_BRIDGE_DISPLAY" timeout 3 wl-paste --primary --no-newline ;;
+        xclip)    timeout 3 xclip -selection primary -o ;;
+        *)        false ;;
+    esac > "$out" 2>/dev/null
+    if [[ ! -s "$out" && -f "${base}/host/last-selection" ]]; then
+        cp -f "${base}/host/last-selection" "$out"
+    fi
+    if [[ -s "$out" ]]; then cat "$out"; rm -f "$out"; return 0; fi
+    rm -f "$out"
+    return 1
+}
+
+# Host side of the bridge: serve requests ("ID list", "ID get TYPE",
+# "ID primary", "ID copy clipboard|primary" with the text in ID.in; one
 # per line on fd 3) until process $2 (the session) is gone, then remove the
 # session directory $1. Everything read from the container is validated,
 # and answers are written in a host-only directory and renamed into the
 # shared one: the container owns the shared directory, so a file opened
-# there by name could be a symlink it planted.
+# there by name could be a symlink it planted. For the same reason the text
+# to copy is read without following a link (it would otherwise be a way to
+# read any host file back through the primary selection).
 clipboard_bridge_serve() {
     local base="$1" pid="$2" tool="$3"
     local shared="${base}/shared" id op type tmp rc
@@ -1076,10 +1151,28 @@ clipboard_bridge_serve() {
         id="" op="" type=""
         read -r -t 2 -u 3 id op type || continue
         [[ "$id" =~ ^[0-9]+\.[0-9]+$ ]] || continue
-        [[ "$op" == list || ( "$op" == get && "$type" =~ ^${CLIPBOARD_IMAGE_TYPES}$ ) ]] || continue
         tmp="${base}/host/${id}"
         rc=0
-        clipboard_bridge_answer "$tool" "$op" "$type" > "${tmp}.out" || rc=$?
+        case "${op} ${type}" in
+            "list ")
+                clipboard_bridge_answer "$tool" list "" > "${tmp}.out" || rc=$? ;;
+            "get "*)
+                [[ "$type" =~ ^${CLIPBOARD_IMAGE_TYPES}$ ]] || continue
+                clipboard_bridge_answer "$tool" get "$type" > "${tmp}.out" || rc=$? ;;
+            "primary ")
+                clipboard_bridge_primary "$tool" "$base" > "${tmp}.out" || rc=$? ;;
+            "copy clipboard"|"copy primary")
+                : > "${tmp}.out"
+                if timeout 2 dd if="${shared}/${id}.in" of="${tmp}.in" iflag=nofollow bs=1M count=1 status=none 2>/dev/null \
+                        && [[ -s "${tmp}.in" ]]; then
+                    clipboard_bridge_copy "$tool" "$base" "$type" "${tmp}.in"
+                else
+                    rc=1
+                fi
+                rm -f "${tmp}.in" ;;
+            *)
+                continue ;;
+        esac
         echo "$rc" > "${tmp}.rc"
         # New files carry the host label; give them the shared directory's
         # (container-readable) one. A no-op failure without SELinux.
@@ -1122,6 +1215,9 @@ clipboard_bridge_setup() {
 
     add_mount "${base}/shared" /run/codebox-clipboard
     add_mount "${base}/shim/wl-paste" /usr/local/bin/wl-paste "ro"
+    add_mount "${base}/shim/wl-paste" /usr/local/bin/wl-copy "ro"
+    # Not a socket: only makes harnesses pick wl-copy/wl-paste (the shim)
+    add_env WAYLAND_DISPLAY codebox-clipboard-bridge
 
     CLIPBOARD_BRIDGE_DISPLAY="$wl"
     # $$ is the launcher, which later execs the runtime and keeps its PID:
@@ -1178,15 +1274,16 @@ add_clipboard_mounts() {
             # WAYLAND_DISPLAY/DISPLAY next to a dead socket makes the
             # harness use wl-copy/wl-paste, which fail, instead of the
             # terminal's OSC 52 clipboard), the clipboard that matters is
-            # the SSH client's, or this host has no display. Text goes
-            # through the terminal, images through the bridge.
+            # the SSH client's, or this host has no display. Images and the
+            # selection go through the bridge; the terminal still gets
+            # every copy too (OSC 52).
             local sources=""
             $ssh_live && sources="SSH-forwarded clipboard"
             [[ -n "$CLIPBOARD_BRIDGE_TOOL" ]] && sources="${sources:+${sources}, }host ${CLIPBOARD_BRIDGE_TOOL}"
             if [[ -n "$sources" ]]; then
-                CLIPBOARD_STATUS="images via the host bridge (${sources}), text via the terminal"
+                CLIPBOARD_STATUS="host bridge: images (${sources}), selection and middle-click paste"
             else
-                CLIPBOARD_STATUS="text via the terminal; images once a clipboard socket is forwarded over SSH"
+                CLIPBOARD_STATUS="host bridge: selection and middle-click paste; images once a clipboard socket is forwarded over SSH"
             fi
             if [[ -n "$CLIPBOARD_BRIDGE_NEEDS" ]]; then
                 log_warn "Pasting images from this machine's clipboard needs ${CLIPBOARD_BRIDGE_NEEDS} installed on the host"

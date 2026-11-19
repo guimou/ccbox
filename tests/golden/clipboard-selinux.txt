@@ -14,6 +14,7 @@
 -e PROJECT_NAME=demo
 -e TERM=xterm-256color
 -e TZ=UTC
+-e WAYLAND_DISPLAY=codebox-clipboard-bridge
 -it
 -v /etc/localtime:/etc/localtime:ro
 -v ROOT/home/.claude.json:/home/coder/.claude.json:z
@@ -50,6 +51,7 @@
 -v ROOT/npm-global:/home/coder/.npm-global:ro,z
 -v ROOT/repos/demo:/workspace:z
 -v ROOT/run/codebox-clipboard/ccbox-demo-HASH-SESSION/shared:/run/codebox-clipboard:z
+-v ROOT/run/codebox-clipboard/ccbox-demo-HASH-SESSION/shim/wl-paste:/usr/local/bin/wl-copy:ro,z
 -v ROOT/run/codebox-clipboard/ccbox-demo-HASH-SESSION/shim/wl-paste:/usr/local/bin/wl-paste:ro,z
 -w /workspace
 --

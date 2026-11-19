@@ -15,10 +15,17 @@ cat > "${ROOT}/stubs/wl-paste" <<'EOF'
 case "$*" in
     --list-types)      printf 'text/plain\nimage/png\nTARGETS\n' ;;
     "--type image/png") printf 'PNGDATA' ;;
+    "--primary --no-newline") cat "${STATE}/primary" 2> /dev/null ;;
     *)                 echo "secret text"; exit 0 ;;
 esac
 EOF
-chmod +x "${ROOT}/stubs/wl-paste"
+cat > "${ROOT}/stubs/wl-copy" <<'EOF'
+#!/bin/bash
+if [[ "$*" == --primary ]]; then cat > "${STATE}/primary"; else cat > "${STATE}/clipboard"; fi
+EOF
+chmod +x "${ROOT}/stubs/wl-paste" "${ROOT}/stubs/wl-copy"
+export STATE="${ROOT}/state"
+mkdir -p "$STATE"
 export PATH="${ROOT}/stubs:${PATH}"
 export XDG_RUNTIME_DIR="${ROOT}/run"
 
@@ -36,20 +43,42 @@ clipboard_bridge_setup wayland-0 "" || { echo "FAIL setup"; exit 1; }
 BASE="${XDG_RUNTIME_DIR}/codebox-clipboard/${CONTAINER_NAME}"
 export CODEBOX_CLIPBOARD_DIR="${BASE}/shared"
 SHIM="${BASE}/shim/wl-paste"
+ln -s "$SHIM" "${ROOT}/wl-copy"
+COPY="${ROOT}/wl-copy"
 status=0
 check() {  # description, expected, actual
     if [[ "$2" == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1: expected '$2', got '$3'"; status=1; fi
 }
 
 check "mounts the shared dir and the shim" \
-    "mount|${BASE}/shared|/run/codebox-clipboard| mount|${BASE}/shim/wl-paste|/usr/local/bin/wl-paste|ro" \
+    "mount|${BASE}/shared|/run/codebox-clipboard| mount|${BASE}/shim/wl-paste|/usr/local/bin/wl-paste|ro mount|${BASE}/shim/wl-paste|/usr/local/bin/wl-copy|ro env|WAYLAND_DISPLAY|codebox-clipboard-bridge" \
     "${BOX_SPEC[*]}"
 check "lists image types only" "image/png" "$("$SHIM" -l)"
 check "returns the image" "PNGDATA" "$("$SHIM" --type image/png)"
 check "image by short option" "PNGDATA" "$("$SHIM" -t image/png)"
 check "refuses text by type" "rc=1:" "$(out=$("$SHIM" --type text/plain); echo "rc=$?:${out}")"
 check "refuses plain text paste" "rc=1:" "$(out=$("$SHIM" --no-newline); echo "rc=$?:${out}")"
-check "refuses the primary selection" "rc=1:" "$(out=$("$SHIM" --primary --no-newline); echo "rc=$?:${out}")"
+check "refuses the clipboard text even as primary type" "rc=1:" "$(out=$("$SHIM" --primary --type image/png); echo "rc=$?:${out}")"
+
+# Selection: written to the host clipboard and primary, primary read back
+check "nothing selected yet" "rc=1:" "$(out=$("$SHIM" --primary --no-newline); echo "rc=$?:${out}")"
+printf 'picked text' | "$COPY"
+printf 'picked text' | "$COPY" --primary
+check "copy reaches the host clipboard" "picked text" "$(cat "${STATE}/clipboard" 2> /dev/null)"
+check "copy reaches the host primary selection" "picked text" "$(cat "${STATE}/primary" 2> /dev/null)"
+check "middle-click reads the primary selection" "picked text" "$("$SHIM" --primary --no-newline)"
+echo -n "selected in another window" > "${STATE}/primary"
+check "the host primary selection wins" "selected in another window" "$("$SHIM" --primary --no-newline)"
+rm -f "${STATE}/primary"
+check "falls back to the last selection of the session" "picked text" "$("$SHIM" --primary --no-newline)"
+
+# The text to copy is not read through a link planted by the container
+echo "host secret" > "${ROOT}/secret"
+ln -s "${ROOT}/secret" "${BASE}/shared/5.5.in"
+echo "5.5 copy primary" > "${BASE}/shared/req"
+for (( i = 0; i < 100; i++ )); do [[ -f "${BASE}/shared/5.5.rc" ]] && break; sleep 0.05; done
+check "does not copy a host file through a planted symlink" "1:picked text" "$(cat "${BASE}/shared/5.5.rc"):$("$SHIM" --primary --no-newline)"
+rm -f "${BASE}/shared"/5.5.*
 
 # A symlink planted by the container where the answer goes is replaced,
 # never written through
