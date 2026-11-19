@@ -344,9 +344,101 @@ Image pasting (CTRL+V) requires display server access:
 - **macOS**: requires [XQuartz](https://www.xquartz.org/) with "Allow connections from network clients" enabled
 - **None found**: the launcher prints a `[WARN] No display server found` line and reports `Clipboard: unavailable` in the status, so a clipboard-blind session is never silent
 
+- **SELinux enforcing (Fedora, RHEL)**: the display socket is **not** wired. SELinux denies a confined container any connection to the compositor or X server, so the socket would be mounted but dead. The clipboard goes through a **host bridge** instead: the launcher starts a small helper on the host that runs the host's `wl-paste`/`wl-copy` (`xclip` on X11) on request, and mounts shims for `wl-paste` and `wl-copy` in the container that ask it through a per-session directory (`$XDG_RUNTIME_DIR/codebox-clipboard/<session>`, removed when the session ends). `WAYLAND_DISPLAY` is set in the container to a name that is not a socket, only so that harnesses use those two commands. The container gets no display access. What the bridge carries:
+  - **Images** of the clipboard (CTRL+V), read-only.
+  - **The selection**: text selected in the harness is written to the host clipboard and primary selection, and the primary selection can be read back, so select + middle-click paste works in both directions (including text selected in another window). The terminal also still receives every copy (OSC 52).
+  - **Not** the text of the regular clipboard (what CTRL+C or a password manager put there): that request is refused. Paste it with the terminal's own paste (CTRL+SHIFT+V).
+  - It needs `wl-clipboard` (or `xclip` on X11) installed **on the host** (`sudo dnf install wl-clipboard`). Without it the launcher warns that this machine's clipboard cannot be read: middle-click then only pastes what was last selected in that session, and images can only come from an SSH-forwarded clipboard (below).
+  - The bridge uses the clipboard of the machine running the launcher. When you work on that machine over SSH, see [Pasting Images over SSH](#pasting-images-over-ssh) to make it read the images of the machine you are typing on instead.
+
 To disable clipboard access: `ccbox --no-clipboard`
 
 **Note:** clipboard image pasting in containers has known limitations. If CTRL+V doesn't work, use file paths instead (e.g., paste `/path/to/image.png`).
+
+## Pasting Images over SSH
+
+When the launcher runs on a remote machine (plain `ssh`, or a terminal such as Herdr or Ghostty connected through it), the image you copied is on the clipboard of the machine in front of you, which the remote machine cannot see. Text is not affected: copies reach your local clipboard through the terminal (OSC 52), and you paste with the terminal's own paste. Middle-click pastes the remote machine's primary selection, or what was last selected in that session; the local primary selection is not forwarded.
+
+For images, the clipboard bridge described above can ask your local machine, through a unix socket forwarded by SSH:
+
+```
+ local machine (laptop)                         remote machine
+ ----------------------                         --------------
+ clipboard                                      harness in the container: CTRL+V
+   ^ wl-paste / xclip                             | wl-paste shim
+ codebox-clipboard-serve                          v
+   ^ $XDG_RUNTIME_DIR/codebox-clipboard.sock    bridge helper (started by the launcher)
+   |                                              |
+   +------------ ssh RemoteForward <--------------+ $XDG_RUNTIME_DIR/codebox-clipboard-ssh.sock
+```
+
+Only image types are served (`png`, `jpeg`, `gif`, `webp`, `bmp`): the local server refuses anything else, so clipboard text never leaves your machine this way.
+
+### 1. Local machine: install the clipboard server
+
+Requires Linux with systemd and `wl-clipboard` (`xclip` on X11). From a checkout of this repository:
+
+```bash
+sudo dnf install wl-clipboard
+install -D -m 755 integrations/clipboard-ssh/codebox-clipboard-serve ~/.local/bin/codebox-clipboard-serve
+install -D -m 644 -t ~/.config/systemd/user \
+    integrations/clipboard-ssh/codebox-clipboard.socket \
+    integrations/clipboard-ssh/codebox-clipboard@.service
+systemctl --user daemon-reload
+systemctl --user enable --now codebox-clipboard.socket
+```
+
+Nothing runs permanently: systemd listens on `$XDG_RUNTIME_DIR/codebox-clipboard.sock` (mode `0600`) and starts the script for the duration of one request. Check it with an image on the clipboard:
+
+```bash
+printf 'list\n' | python3 -c 'import socket,sys,os; s=socket.socket(socket.AF_UNIX); s.connect(os.environ["XDG_RUNTIME_DIR"]+"/codebox-clipboard.sock"); s.sendall(sys.stdin.buffer.read()); s.shutdown(1); print(s.makefile().read())'
+# ok
+# image/png
+```
+
+### 2. Local machine: forward the socket in `~/.ssh/config`
+
+```
+Host my-remote
+    RemoteForward /run/user/REMOTE_UID/codebox-clipboard-ssh.sock /run/user/LOCAL_UID/codebox-clipboard.sock
+```
+
+`LOCAL_UID` is `id -u` on the local machine, `REMOTE_UID` is `id -u` on the remote one (the first path is where the socket appears on the remote machine: `$XDG_RUNTIME_DIR/codebox-clipboard-ssh.sock` there). Anything that connects with the system `ssh` and this host entry gets the forward, including terminals that open their remote sessions through it.
+
+### 3. Remote machine: let `sshd` replace a stale socket
+
+When a connection drops, the forwarded socket file stays behind and the next connection cannot create it again (`Warning: remote port forwarding failed for listen path ...`). Allow `sshd` to replace it, once, as root:
+
+```bash
+echo 'StreamLocalBindUnlink yes' | sudo tee /etc/ssh/sshd_config.d/50-codebox-clipboard.conf
+sudo systemctl reload sshd
+```
+
+The remote machine also needs `python3` on the host (the bridge helper uses it to talk to the socket). Nothing has to be installed in the container image.
+
+### 4. Use it
+
+Reconnect, then start the launcher on the remote machine as usual. The status lines tell which sources the bridge has:
+
+```
+[INFO] Clipboard: host bridge: images (SSH-forwarded clipboard), selection and middle-click paste
+```
+
+Copy an image locally and press CTRL+V in the harness.
+
+How the source is chosen:
+
+- It is decided **for each paste**, not at launch: if something answers on the forwarded socket, the image comes from there; otherwise from the remote machine's own clipboard, when it has a display (and `wl-clipboard`/`xclip`). A session started at the remote machine's own desk and later attached over SSH, or the reverse, pastes from wherever you are connected from.
+- A session started while no socket was forwarded still picks it up later, provided the bridge is active for that session: it is whenever SELinux is enforcing on the remote machine or the remote machine has no display. On a remote machine with a display and SELinux not enforcing, the display socket is wired directly instead (see above) unless the forwarded socket answers at launch, so connect first, then launch.
+- With several SSH connections to the same remote machine, the last one to connect owns the socket.
+- `CODEBOX_CLIPBOARD_SOCKET=/some/path` on the remote machine overrides the socket location.
+
+Security: while you are connected, any process running as your user on the remote machine can fetch the **image** currently on your local clipboard (not text). Remove the `RemoteForward` line, or `systemctl --user disable --now codebox-clipboard.socket`, to turn it off. `--no-clipboard` disables the bridge for a session.
+
+Troubleshooting:
+
+- Status shows `images (host wl-paste)` only, or `images once a clipboard socket is forwarded over SSH`: nothing answers on the remote socket. Check `ls -l $XDG_RUNTIME_DIR/codebox-clipboard-ssh.sock` on the remote machine and run `ssh -v` to see whether the forward was refused (step 3).
+- The socket answers but pasting does nothing: on the local machine, `journalctl --user -u 'codebox-clipboard@*'` shows the server's errors (typically a missing `wl-clipboard`).
 
 ## Agent Teams (ccbox only, experimental)
 
