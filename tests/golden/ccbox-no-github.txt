@@ -7,6 +7,7 @@
 --userns=keep-id:uid=1000,gid=1000
 -e ANTHROPIC_API_KEY=anthropic-stub
 -e AWS_REGION=eu-west-1
+-e CODEBOX_SESSION=ccbox-demo-HASH-SESSION
 -e LANG=C.UTF-8
 -e NO_COLOR=1
 -e PROJECT_NAME=demo
