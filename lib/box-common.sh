@@ -860,7 +860,6 @@ apptainer_rt_render() {
                 ;;
         esac
     done
-    export "APPTAINERENV_CODEBOX_SESSION=${CONTAINER_NAME}"
 
     if ! $NEEDS_SHELL; then
         RUN_ARGS+=("$IMAGE_REF" "$HARNESS_CLI" "${EXTRA_ARGS[@]}")
@@ -1544,6 +1543,11 @@ box_main() {
 
     # Session spec: workspace and basic environment
     add_env PROJECT_NAME "$(basename "$WORKSPACE_DIR")"
+    # The session's own name (the container name), so a process inside can
+    # tell which session it is. Nothing else in the container carries it:
+    # the hostname is the launcher's, and Podman fills /run/.containerenv
+    # only for privileged containers.
+    add_env CODEBOX_SESSION "$CONTAINER_NAME"
     add_mount "$WORKSPACE_DIR" /workspace
     add_env TERM "${TERM:-xterm-256color}"
     add_env LANG "${LANG:-C.UTF-8}"
