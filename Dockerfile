@@ -148,6 +148,14 @@ RUN set -eu; \
             PI_CONFIG_FILES=/etc/codebox/omp-config.yml /usr/local/bin/omp config path && \
         rm -rf /tmp/omp-build && \
         chmod -R a+rX,go-w /usr/local/lib/omp && \
+        # omp >= 19.1.1 sets explicit timestamps on natives/<version> at
+        # every start (utimes), which only the owner may do: a root-owned
+        # dir aborts with "EPERM ... utime". Hand it to coder (uid 1000 =
+        # the session user under podman keep-id and in the k8s pod).
+        # ponytail: an OpenShell sandbox uid still hits EPERM; drop this
+        # chown once can1357/oh-my-pi#20267 (use a present addon without
+        # the touch) ships.
+        chown -R coder:coder /usr/local/lib/omp && \
         # Build guard: the native addon for this arch must have extracted
         find /usr/local/lib/omp/natives -name 'pi_natives.*.node' | grep -q . && \
         printf '%s\n' /sandbox/.omp > /etc/codebox/sandbox-state-dirs ;; \
