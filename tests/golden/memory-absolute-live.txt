@@ -2,6 +2,7 @@
 --hostname ccbox
 --init
 --log-driver=none
+--memory=24576M
 --name ccbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000

@@ -2,6 +2,7 @@
 --hostname ompbox
 --init
 --log-driver=none
+--memory=16384m
 --name ompbox-demo-HASH-SESSION
 --rm
 --userns=keep-id:uid=1000,gid=1000
