@@ -103,6 +103,8 @@ Apptainer environment variables:
 
 Coding agents (and the builds, test runs and browsers they start) can use a lot of memory, and several sessions at once can exhaust the host until the desktop freezes. With the Podman runtime on Linux, every session of every launcher (ccbox, ocbox, qcbox, cxbox, ompbox) therefore runs inside one systemd user slice, `codebox.slice`, that holds a **single memory budget shared by all of them**. When the agents together reach it, the kernel first slows them down (`MemoryHigh`), then OOM-kills a process inside the slice (`MemoryMax`). Your desktop, browser and system services stay outside the slice and keep running.
 
+Each session also has **its own limit** inside that budget (half of it by default), so one runaway session is stopped before it can disturb the others: see [One session cannot take the others down](#one-session-cannot-take-the-others-down).
+
 It is on by default. The defaults are percentages of physical RAM, so the same defaults fit any machine:
 
 | Variable | Default | Meaning |
@@ -110,6 +112,7 @@ It is on by default. The defaults are percentages of physical RAM, so the same d
 | `CODEBOX_MEMORY_MAX` | `80%` | Hard limit for all sessions together. `off` disables the budget. |
 | `CODEBOX_MEMORY_HIGH` | 90% of the max | Throttling threshold: above it, the agents are slowed down and their memory reclaimed aggressively |
 | `CODEBOX_MEMORY_SWAP_MAX` | `2G` | Swap the sessions may use together (`0` for none). Kept small on purpose: an agent swapping heavily (zram included) is what makes a host thrash. |
+| `CODEBOX_MEMORY_SESSION_MAX` | half of the max (half of `CODEBOX_MEMORY_HIGH` when you set that one) | Hard limit for one session (`podman run --memory`). `infinity` removes it. |
 | `CODEBOX_SLICE` | `codebox.slice` | Slice name |
 
 Sizes use systemd syntax: a number with an optional `K`/`M`/`G`/`T` suffix, a percentage of RAM (not for the swap limit), or `infinity`.
@@ -129,9 +132,21 @@ How it works:
 
 - The launcher writes `~/.config/systemd/user/codebox.slice` from these variables and reloads the user manager when the content changed (and updates a running slice live), then starts the container with `--cgroup-parent=codebox.slice`. Configure it through the variables, not by editing the file: the next launch would rewrite it.
 - The slice is shared, so the values from the most recent launch apply to all running sessions. Keep the variables in your shell profile so every launch agrees.
-- A single session can still use the whole budget. If one agent hits it, the kernel kills a process inside the slice (often the agent's biggest child: a build, a test run, a browser), not your desktop.
+- A single session can use up to `CODEBOX_MEMORY_SESSION_MAX`. When it gets there, the kernel kills a process inside that session's container (usually its biggest child: a build, a test run, a browser; the agent itself if it is the biggest), and the other sessions keep running.
 - `ccbox --no-memory-limit` (or `CODEBOX_MEMORY_MAX=off`) runs a session outside the budget.
-- Requirements, checked at launch: Linux with cgroup v2, a systemd user session with the memory controller delegated to it, and Podman using the `systemd` cgroup manager (all defaults on Fedora). If one is missing, the launcher warns and starts without a budget. macOS (Podman machine) and the Apptainer runtime are not covered; in a pod, the pod's own memory limit plays this role.
+- Requirements, checked at launch: Linux with cgroup v2, a systemd user session with the memory controller delegated to it, and Podman using the `systemd` cgroup manager (all defaults on Fedora). If one is missing, the launcher warns and starts without a budget and without the per-session limit. macOS (Podman machine) and the Apptainer runtime are not covered; in a pod, the pod's own memory limit plays this role.
+
+### One session cannot take the others down
+
+The shared budget alone does not protect the sessions from each other. Above `MemoryHigh` the kernel throttles the whole slice instead of killing anything, and on a host running `systemd-oomd` (the default on Fedora) that sustained memory pressure makes `systemd-oomd` kill a **whole container** in the slice after 20 seconds, and not necessarily the one using the memory. A single runaway process (a test run left behind in the background, for example) can this way end an idle session in another project, then its own.
+
+The per-session limit prevents this: by default it sits below `MemoryHigh` (half of `CODEBOX_MEMORY_MAX`, against 90% for `MemoryHigh`; half of `CODEBOX_MEMORY_HIGH` when you set that one), so the runaway process reaches it first and is OOM-killed by the kernel inside its own container. Notes:
+
+- A percentage is resolved against physical RAM at launch, as `podman run --memory` takes no percentages. The limit applies to sessions started after you change it; running sessions keep theirs.
+- If you set it yourself, keep it below `MemoryHigh`, or it no longer comes first.
+- Two sessions that both run away can still reach the shared budget together.
+- If one session really needs more (a large build), raise it for that launch: `CODEBOX_MEMORY_SESSION_MAX=40G ccbox`.
+- To see why a session disappeared: `journalctl -u systemd-oomd` (a container killed for memory pressure) and `journalctl -k | grep -i oom` (a process killed at a limit).
 
 Check usage with `systemctl --user status codebox.slice` or `systemd-cgtop -m user.slice`. Both count the page cache of files the agents touched, most of which the kernel reclaims first under pressure, so they read higher than what the agents really hold.
 

@@ -60,6 +60,10 @@ mkdir -p "$USER_CG"
 echo "cpuset cpu io memory hugetlb pids misc" > "${CGROUP_ROOT}/cgroup.controllers"
 echo "cpu memory pids" > "${USER_CG}/cgroup.controllers"
 SLICE_DIR="${FAKE_HOME}/.config/systemd/user"
+# Fixed amount of RAM (64 GiB), so a per-session limit given as a percentage
+# resolves to the same value on every machine (CODEBOX_MEMINFO points here)
+MEMINFO="${ROOT}/meminfo"
+echo "MemTotal:       67108864 kB" > "$MEMINFO"
 
 # Wayland socket and selinuxfs trees for the clipboard scenarios
 RUNTIME_DIR="${ROOT}/run"
@@ -184,6 +188,8 @@ SCENARIOS=(
     # scenario above; these set the CODEBOX_MEMORY_* variables (see below)
     "memory-absolute-live|ccbox|"
     "memory-percent|ompbox|"
+    "memory-session|ccbox|"
+    "memory-session-off|ocbox|"
     "memory-env-off|cxbox|"
     "memory-flag-off|ccbox|--no-memory-limit"
     "memory-unavailable|qcbox|"
@@ -194,6 +200,7 @@ SCENARIOS=(
     "clipboard-selinux|ccbox|"
     "!memory-invalid-max|ccbox|"
     "!memory-invalid-swap|ccbox|"
+    "!memory-invalid-session|ccbox|"
     "!memory-invalid-slice|ccbox|"
 )
 
@@ -218,6 +225,7 @@ run_launcher() {  # uses the caller's name (scenario) and EXTRA_ENV
             AWS_REGION=eu-west-1 \
             NO_COLOR=1 \
             CODEBOX_CGROUP_ROOT="$CGROUP_ROOT" \
+            CODEBOX_MEMINFO="$MEMINFO" \
             SYSTEMCTL_LOG="${OUT}/${name}.systemctl" \
             "${EXTRA_ENV[@]}" \
             "${BIN}/${box}" "$@" > "${OUT}/${name}.log" 2>&1
@@ -269,12 +277,15 @@ for entry in "${SCENARIOS[@]}"; do
     case "${name#!}" in
         memory-absolute-live) EXTRA_ENV=(CODEBOX_MEMORY_MAX=48G CODEBOX_MEMORY_SWAP_MAX=0 STUB_SLICE_ACTIVE=0) ;;
         memory-percent)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=60% CODEBOX_MEMORY_HIGH=50% CODEBOX_SLICE=agents.slice) ;;
+        memory-session)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=48G CODEBOX_MEMORY_SESSION_MAX=12G) ;;
+        memory-session-off)   EXTRA_ENV=(CODEBOX_MEMORY_SESSION_MAX=infinity) ;;
         memory-env-off)       EXTRA_ENV=(CODEBOX_MEMORY_MAX=off) ;;
         memory-unavailable)   EXTRA_ENV=(STUB_CGROUP_MANAGER=cgroupfs) ;;
         clipboard-wayland)    EXTRA_ENV=("XDG_RUNTIME_DIR=${RUNTIME_DIR}" "CODEBOX_SELINUX_ROOT=${ROOT}/selinux-permissive") ;;
         clipboard-selinux)    EXTRA_ENV=("XDG_RUNTIME_DIR=${RUNTIME_DIR}" WAYLAND_DISPLAY=wayland-0 "CODEBOX_SELINUX_ROOT=${ROOT}/selinux-enforcing") ;;
         memory-invalid-max)   EXTRA_ENV=(CODEBOX_MEMORY_MAX=lots) ;;
         memory-invalid-swap)  EXTRA_ENV=(CODEBOX_MEMORY_SWAP_MAX=50%) ;;
+        memory-invalid-session) EXTRA_ENV=(CODEBOX_MEMORY_SESSION_MAX=half) ;;
         memory-invalid-slice) EXTRA_ENV=(CODEBOX_SLICE=../evil) ;;
     esac
     rm -rf "$SLICE_DIR"

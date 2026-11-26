@@ -335,6 +335,7 @@ show_help() {
     echo "  CODEBOX_MEMORY_MAX       Hard limit for all sessions together (default 80% of RAM; 'off' disables)"
     echo "  CODEBOX_MEMORY_HIGH      Throttling threshold (default 90% of the max)"
     echo "  CODEBOX_MEMORY_SWAP_MAX  Swap the sessions may use (default 2G)"
+    echo "  CODEBOX_MEMORY_SESSION_MAX  Hard limit for one session (default half of the max; 'infinity' for none)"
 }
 
 # Read version from the harness version file if not specified via command line
@@ -521,17 +522,25 @@ podman_rt_resolve_image() {
 # Every podman session of every launcher (ccbox, ocbox, qcbox, cxbox, ompbox)
 # joins one systemd user slice, so all agents together share a single memory
 # budget: when they reach it, the kernel throttles and then OOM-kills inside
-# the slice, and the rest of the desktop keeps running. The slice unit is
-# generated from these variables (percentages are of physical RAM, so the
-# defaults fit any machine; set absolute sizes per machine to override):
+# the slice, and the rest of the desktop keeps running. Each session also gets
+# its own hard limit (podman --memory) below the slice's throttling threshold,
+# so one runaway session is OOM-killed inside its own container before it can
+# put the whole slice under pressure: on a host running systemd-oomd (Fedora's
+# default), sustained pressure on the slice gets a whole container killed, and
+# not necessarily the one using the memory. The slice unit and the session
+# limit are generated from these variables (percentages are of physical RAM,
+# so the defaults fit any machine; set absolute sizes per machine to override):
 #   CODEBOX_MEMORY_MAX       hard limit of the slice (default 80%), or "off"
 #                            to run sessions without a budget
 #   CODEBOX_MEMORY_HIGH      throttling threshold (default 90% of the max)
 #   CODEBOX_MEMORY_SWAP_MAX  swap the slice may use (default 2G)
+#   CODEBOX_MEMORY_SESSION_MAX  hard limit of one session (default half of
+#                            the slice's limit, or of CODEBOX_MEMORY_HIGH when
+#                            that is set), or "infinity" for none
 #   CODEBOX_SLICE            slice name (default codebox.slice)
 # Sizes take systemd syntax: a number with an optional K/M/G/T suffix, a
-# percentage, or "infinity". CODEBOX_CGROUP_ROOT (default /sys/fs/cgroup)
-# exists for the tests.
+# percentage, or "infinity". CODEBOX_CGROUP_ROOT (default /sys/fs/cgroup) and
+# CODEBOX_MEMINFO (default /proc/meminfo) exist for the tests.
 
 MEMORY_BUDGET_STATUS=""
 
@@ -549,12 +558,13 @@ check_memory_size() {
     exit 1
 }
 
-# Default throttling threshold: 90% of the hard limit, in the same unit.
-default_memory_high() {
-    local max="$1" num suffix
+# A fraction ($2/$3) of a size ($1): a percentage stays a percentage, an
+# absolute size comes back in M. Empty for "infinity" or a result under 1M.
+memory_fraction() {
+    local max="$1" mul="$2" div="$3" num suffix
     case "$max" in
         infinity) echo "" ;;
-        *%)       echo "$(( 10#${max%\%} * 9 / 10 ))%" ;;
+        *%)       echo "$(( 10#${max%\%} * mul / div ))%" ;;
         *)
             num="${max%[KMGT]}"
             suffix="${max#"$num"}"
@@ -565,9 +575,24 @@ default_memory_high() {
                 G) num=$(( num * 1024 * 1024 * 1024 )) ;;
                 T) num=$(( num * 1024 * 1024 * 1024 * 1024 )) ;;
             esac
-            num=$(( num * 9 / 10 / 1024 / 1024 ))
+            num=$(( num * mul / div / 1024 / 1024 ))
             (( num > 0 )) && echo "${num}M" || echo ""
             ;;
+    esac
+}
+
+# A size ($1) as podman --memory takes it: podman has no percentages, so one
+# is resolved against physical RAM here. Empty for no limit.
+podman_memory_size() {
+    local value="$1" total_kb
+    case "$value" in
+        ""|infinity) echo "" ;;
+        *%)
+            total_kb="$(awk '/^MemTotal:/ {print $2; exit}' "${CODEBOX_MEMINFO:-/proc/meminfo}" 2>/dev/null)"
+            [[ "$total_kb" =~ ^[0-9]+$ ]] || { echo ""; return 0; }
+            echo "$(( total_kb * 10#${value%\%} / 100 / 1024 ))m"
+            ;;
+        *) echo "$value" ;;
     esac
 }
 
@@ -589,14 +614,17 @@ memory_budget_unavailable() {
 }
 
 # Write the slice unit if its content changed and apply it, then point
-# podman at it. Sets MEMORY_BUDGET_SLICE (empty when no budget applies) and
-# MEMORY_BUDGET_STATUS for the launch summary.
+# podman at it. Sets MEMORY_BUDGET_SLICE (empty when no budget applies),
+# MEMORY_SESSION_LIMIT (the session's own limit for podman --memory, empty
+# for none) and MEMORY_BUDGET_STATUS for the launch summary.
 setup_memory_budget() {
     MEMORY_BUDGET_SLICE=""
+    MEMORY_SESSION_LIMIT=""
     local slice="${CODEBOX_SLICE:-codebox.slice}"
     local max="${CODEBOX_MEMORY_MAX:-80%}"
     local high="${CODEBOX_MEMORY_HIGH:-}"
     local swap="${CODEBOX_MEMORY_SWAP_MAX:-2G}"
+    local session="${CODEBOX_MEMORY_SESSION_MAX:-}"
 
     if $NO_MEMORY_LIMIT || [[ "$max" == off ]]; then
         MEMORY_BUDGET_STATUS="Memory budget: disabled"
@@ -609,7 +637,12 @@ setup_memory_budget() {
     check_memory_size CODEBOX_MEMORY_MAX "$max"
     check_memory_size CODEBOX_MEMORY_HIGH "$high"
     check_memory_size CODEBOX_MEMORY_SWAP_MAX "$swap" false
-    [[ -z "$high" ]] && high="$(default_memory_high "$max")"
+    check_memory_size CODEBOX_MEMORY_SESSION_MAX "$session"
+    [[ -z "$high" ]] && high="$(memory_fraction "$max" 9 10)"
+    # Half of the throttling threshold when that one is set explicitly, so
+    # the default always stays below it; half of the hard limit otherwise
+    [[ -z "$session" ]] && session="$(memory_fraction "${CODEBOX_MEMORY_HIGH:-$max}" 1 2)"
+    [[ -z "$session" ]] && session="$(memory_fraction "$max" 1 2)"
 
     local reason
     reason="$(memory_budget_unavailable)"
@@ -650,7 +683,8 @@ setup_memory_budget() {
     fi
 
     MEMORY_BUDGET_SLICE="$slice"
-    MEMORY_BUDGET_STATUS="Memory budget: ${slice} (max ${max}${high:+, high ${high}}, swap ${swap}; shared by all sessions)"
+    MEMORY_SESSION_LIMIT="$(podman_memory_size "$session")"
+    MEMORY_BUDGET_STATUS="Memory budget: ${slice} (max ${max}${high:+, high ${high}}, swap ${swap}; shared by all sessions${MEMORY_SESSION_LIMIT:+; ${session} per session})"
 }
 
 # Render BOX_SPEC + launch command into RUN_ARGS for `podman run`
@@ -678,6 +712,7 @@ podman_rt_render() {
     setup_memory_budget
     if [[ -n "$MEMORY_BUDGET_SLICE" ]]; then
         RUN_ARGS+=("--cgroup-parent=${MEMORY_BUDGET_SLICE}")
+        [[ -n "$MEMORY_SESSION_LIMIT" ]] && RUN_ARGS+=("--memory=${MEMORY_SESSION_LIMIT}")
     fi
 
     local entry kind a b c
